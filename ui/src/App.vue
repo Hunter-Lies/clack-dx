@@ -221,7 +221,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="stage">
-    <div class="console" :class="phase" @mousedown="onShellDown">
+    <div class="console" @mousedown="onShellDown">
       <MainPage
         :items="items"
         :phase="phase"

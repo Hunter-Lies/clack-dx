@@ -783,7 +783,7 @@ svg {
 }
 
 /* ---------- 一、还没检测 ---------- */
-.idle {
+.idle-pane {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
@@ -791,13 +791,13 @@ svg {
   padding: 28px 16px 4px;
 }
 
-.idle .big {
+.idle-pane .big {
   font-size: 30px;
   font-weight: 600;
   color: var(--beige-dim);
 }
 
-.idle .hint {
+.idle-pane .hint {
   font-size: 11.5px;
   color: var(--beige-faint);
 }
@@ -891,6 +891,19 @@ svg {
 
 .log .l.head:first-child {
   margin-top: 0;
+}
+
+/* 调试读数：绝对定位，绝不参与布局（?debug=1 时才有） */
+.dbg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 9;
+  padding: 2px 4px;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.75);
 }
 
 /* 修完之后压在打勾下面的一句补充（比如"重启后替换"） */

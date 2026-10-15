@@ -118,10 +118,24 @@ onMounted(() => {
   const it = props.items.find((x) => x.id === id);
   if (it) toggle(it);
 });
+
+// 调 UI 用：?debug=1 把各块实测高度写进 DOM（headless 取 DOM 时看）
+const dbg = ref("");
+if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("debug")) {
+  onMounted(async () => {
+    await nextTick();
+    const r = (sel) => {
+      const b = document.querySelector(sel)?.getBoundingClientRect();
+      return b ? `${Math.round(b.top)}..${Math.round(b.bottom)}` : "-";
+    };
+    dbg.value = `DEBUG console=${r(".console")} page=${r(".page")} screen=${r(".screen")} deck=${r(".deck")} status=${r(".screen-status")} idlebox=${r(".idle-pane")} skel=${r(".skeleton")} rows=${r(".rows")} card=${r(".card")} install=${r(".install")}`;
+  });
+}
 </script>
 
 <template>
   <div class="page">
+    <div v-if="dbg" class="dbg">{{ dbg }}</div>
     <!-- 左：整块屏幕留给报告 -->
     <ScreenPanel>
       <!-- 修完只留一个圈打勾 -->
@@ -134,7 +148,7 @@ onMounted(() => {
 
       <!-- 一、还没检测 -->
       <template v-else-if="phase === 'idle'">
-        <div class="idle">
+        <div class="idle-pane">
           <span class="big">未检测</span>
           <span class="hint">按下面的检测键，先看看缺什么</span>
         </div>
