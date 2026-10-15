@@ -16,6 +16,9 @@ static BUSY: AtomicBool = AtomicBool::new(false);
 /// 正在用管理员身份重新拉起自己。这时候别清 payload——下一个进程还要用。
 static RELAUNCHING: AtomicBool = AtomicBool::new(false);
 
+/// 开了 `--verify-hash` 时，除了版本还会逐字节比对（慢，抓静默损坏）
+static VERIFY_HASH: AtomicBool = AtomicBool::new(false);
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Arch {
@@ -89,18 +92,44 @@ fn group_by_id(id: &str) -> Option<&'static Group> {
 pub struct GroupInfo {
     id: String,
     name: String,
-    /// 界面第二列：缺几个 / 已齐全
+    /// 界面第二列：缺 6 个 · 异常 2 个 / 已齐全
     note: String,
     total: usize,
     missing: usize,
+    /// 存在但不对（截断、读不出、旧版、被顶替）的个数
+    abnormal: usize,
 }
 
-/// 明细面板用：一个文件在哪些架构下缺
+/// 明细面板用：一个文件在哪些架构下不对，以及为什么
 #[derive(Serialize)]
 pub struct FileInfo {
     name: String,
     x86: bool,
     x64: bool,
+    /// 只对异常项写原因：0 字节 / 版本 x < y / 读不出文件版本 / 内容不符
+    why: String,
+}
+
+/// 一个文件在系统里的状况
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum St {
+    /// 系统目录里没有
+    Missing,
+    /// 在，但读不出/被截断/被顶替
+    Damaged,
+    /// 在，但比 payload 里的旧
+    Older,
+    /// 在，且版本不低于 payload
+    Ok,
+}
+
+/// 一个文件在 payload 里的样子 + 它在系统里的样子
+struct Case {
+    arch: Arch,
+    name: String,
+    st: St,
+    /// 异常时的原因；Ok/缺失时为空
+    why: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -118,6 +147,8 @@ struct Progress {
 struct Done {
     ok: bool,
     copied: usize,
+    /// 覆盖回去的异常文件（损坏 / 旧版）
+    repaired: usize,
     skipped: usize,
     /// 这些文件当时被占用、杀不掉占用进程，已经安排"重启后替换"
     pending_reboot: usize,
@@ -129,7 +160,8 @@ struct ScanLog {
     /// 这一行属于哪一组（换组时界面会打一行组名）
     group: String,
     text: String,
-    missing: bool,
+    /// ok | missing | bad
+    state: &'static str,
     index: usize,
     total: usize,
 }
@@ -287,14 +319,183 @@ fn group_files(root: &Path, id: &str) -> Vec<(Arch, String)> {
     out
 }
 
-fn missing_of(root: &Path, id: &str) -> (usize, usize, Vec<(Arch, String)>) {
-    let files = group_files(root, id);
-    let missing: Vec<(Arch, String)> = files
-        .iter()
-        .filter(|(arch, name)| !target_dir(*arch).join(name).is_file())
-        .cloned()
+// ---------- 判定：文件对不对 ----------
+
+/// 读文件的固定版本（VS_FIXEDFILEINFO 的四段数字）。
+/// 不用 FileVersion 字符串：那玩意带 `(WGGT_OCT06.Release)` 这种后缀，比不了。
+#[cfg(windows)]
+fn file_version(path: &Path) -> Option<[u32; 4]> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+    };
+
+    // VS_FIXEDFILEINFO 在 windows-sys 里没导出，自己按官方布局定义
+    #[repr(C)]
+    struct FixedFileInfo {
+        signature: u32,
+        struc_version: u32,
+        file_version_ms: u32,
+        file_version_ls: u32,
+        product_version_ms: u32,
+        product_version_ls: u32,
+        file_flags_mask: u32,
+        file_flags: u32,
+        file_os: u32,
+        file_type: u32,
+        file_subtype: u32,
+        file_date_ms: u32,
+        file_date_ls: u32,
+    }
+
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
         .collect();
-    (files.len(), missing.len(), missing)
+    unsafe {
+        let mut handle: u32 = 0;
+        let size = GetFileVersionInfoSizeW(wide.as_ptr(), &mut handle);
+        if size == 0 {
+            return None; // 没有版本资源（0 字节、被截断、被换成别的东西都在这儿）
+        }
+        let mut buf = vec![0u8; size as usize];
+        if GetFileVersionInfoW(wide.as_ptr(), 0, size, buf.as_mut_ptr() as *mut _) == 0 {
+            return None;
+        }
+        let sub: Vec<u16> = "\\".encode_utf16().chain(std::iter::once(0)).collect();
+        let mut ptr: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut len: u32 = 0;
+        if VerQueryValueW(
+            buf.as_ptr() as *const _,
+            sub.as_ptr(),
+            &mut ptr,
+            &mut len,
+        ) == 0
+            || ptr.is_null()
+            || (len as usize) < std::mem::size_of::<FixedFileInfo>()
+        {
+            return None;
+        }
+        let info = &*(ptr as *const FixedFileInfo);
+        if info.signature != 0xFEEF_04BD {
+            return None;
+        }
+        let v = [
+            info.file_version_ms >> 16,
+            info.file_version_ms & 0xFFFF,
+            info.file_version_ls >> 16,
+            info.file_version_ls & 0xFFFF,
+        ];
+        if v == [0, 0, 0, 0] {
+            return None; // 版本资源里写着 0.0.0.0，当作读不出来
+        }
+        Some(v)
+    }
+}
+
+#[cfg(not(windows))]
+fn file_version(_path: &Path) -> Option<[u32; 4]> {
+    None
+}
+
+/// 判一个文件：payload 那份和系统那份各是什么样，该怎么定性。
+/// 只往新了走——目标版本不低于 payload 就算好，绝不因为"内容不一样"去覆盖，
+/// 免得把微软安全更新过的文件换成我们 payload 里的老版本。
+fn classify(
+    payload_ver: Option<[u32; 4]>,
+    payload_size: u64,
+    target_ver: Option<[u32; 4]>,
+    target_size: u64,
+) -> St {
+    let Some(pv) = payload_ver else {
+        // payload 自己没版本号（理论上不会有）：退化成比大小
+        return if target_size == payload_size { St::Ok } else { St::Damaged };
+    };
+    match target_ver {
+        None => St::Damaged,
+        Some(tv) if tv < pv => St::Older,
+        Some(tv) if tv == pv && target_size != payload_size => St::Damaged,
+        Some(_) => St::Ok,
+    }
+}
+
+fn fmt_ver(v: [u32; 4]) -> String {
+    format!("{}.{}.{}.{}", v[0], v[1], v[2], v[3])
+}
+
+/// 扫一组：给出每个文件的状态。--verify-hash 开着时，对"版本看着没问题"的
+/// 再逐字节比一遍，抓版本对、大小也对、但内容坏了的静默损坏。
+fn inspect(root: &Path, id: &str) -> Vec<Case> {
+    let mut out = Vec::new();
+    for (arch, name) in group_files(root, id) {
+        let from = root.join(arch.dir()).join(&name);
+        let to = target_dir(arch).join(&name);
+        let psize = std::fs::metadata(&from).map(|m| m.len()).unwrap_or(0);
+        let pver = file_version(&from);
+
+        let (st, why) = match std::fs::metadata(&to) {
+            Err(_) => (St::Missing, String::new()),
+            Ok(m) => {
+                let tsize = m.len();
+                let tver = file_version(&to);
+                let st = classify(pver, psize, tver, tsize);
+                let why = match st {
+                    St::Damaged if tsize == 0 => "0 字节".to_string(),
+                    St::Damaged if tver.is_none() => "读不出文件版本".to_string(),
+                    St::Damaged => "内容不完整".to_string(),
+                    St::Older => format!(
+                        "版本 {} < {}",
+                        tver.map(fmt_ver).unwrap_or_else(|| "?".into()),
+                        pver.map(fmt_ver).unwrap_or_else(|| "?".into())
+                    ),
+                    _ => String::new(),
+                };
+                (st, why)
+            }
+        };
+
+        let mut st = st;
+        let mut why = why;
+        if st == St::Ok && VERIFY_HASH.load(Ordering::SeqCst) && !same_bytes(&from, &to) {
+            st = St::Damaged;
+            why = "内容不符".to_string();
+        }
+
+        out.push(Case {
+            arch,
+            name,
+            st,
+            why,
+        });
+    }
+    out
+}
+
+/// 逐字节比两个文件（--verify-hash 才走这条）。不走哈希：省一个依赖，
+/// 而且逐字节比不哈希弱——任何差异都逃不掉。
+fn same_bytes(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    let (Ok(mut fa), Ok(mut fb)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
+        return false;
+    };
+    if fa.metadata().map(|m| m.len()).ok() != fb.metadata().map(|m| m.len()).ok() {
+        return false;
+    }
+    let mut ba = vec![0u8; 64 * 1024];
+    let mut bb = vec![0u8; 64 * 1024];
+    loop {
+        let (na, nb) = (
+            fa.read(&mut ba).unwrap_or(0),
+            fb.read(&mut bb).unwrap_or(0),
+        );
+        if na != nb || ba[..na] != bb[..nb] {
+            return false;
+        }
+        if na == 0 {
+            return true;
+        }
+    }
 }
 
 // ---------- 占用 ----------
@@ -423,7 +624,7 @@ fn schedule_replace_on_reboot(_from: &Path, _to: &Path) -> bool {
 
 // ---------- 命令 ----------
 
-/// 检测：逐个文件看系统目录里有没有，边查边把结果推给前端。
+/// 检测：逐个文件看系统目录里那份对不对，边查边把结果推给前端。
 /// 返回的是汇总（界面报告用），中间那一行行的进度走 scan:log 事件。
 #[tauri::command]
 fn detect(app: AppHandle) -> Vec<GroupInfo> {
@@ -431,62 +632,70 @@ fn detect(app: AppHandle) -> Vec<GroupInfo> {
         return Vec::new();
     };
 
-    // 先把要查的排个队，好算总进度
-    let mut jobs: Vec<(&'static Group, Arch, String)> = Vec::new();
+    // 先全查一遍（分组顺序），顺便把每组结果留着给报告用
+    let mut scanned: Vec<(&'static Group, Vec<Case>)> = Vec::new();
     for g in GROUPS {
-        for (arch, name) in group_files(&root, g.id) {
-            jobs.push((g, arch, name));
+        scanned.push((g, inspect(&root, g.id)));
+    }
+
+    // 再一行行往外吐，好算总进度
+    let total: usize = scanned.iter().map(|(_, c)| c.len()).sum();
+    let mut index = 0usize;
+    let mut last_group = "";
+    for (g, cases) in &scanned {
+        for c in cases {
+            let _ = app.emit(
+                "scan:log",
+                ScanLog {
+                    group: if g.id == last_group {
+                        String::new()
+                    } else {
+                        g.name.to_string()
+                    },
+                    text: format!("{}\\{}", c.arch.dir(), c.name),
+                    state: match c.st {
+                        St::Missing => "missing",
+                        St::Damaged | St::Older => "bad",
+                        St::Ok => "ok",
+                    },
+                    index,
+                    total,
+                },
+            );
+            index += 1;
+            last_group = g.id;
+            // 一行一行地吐，太快了看不出在"跑"；368 个文件 × 2ms ≈ 0.7 秒
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }
-    let total = jobs.len();
-    let mut last_group = "";
 
-    for (index, (g, arch, name)) in jobs.iter().enumerate() {
-        let missing = !target_dir(*arch).join(name).is_file();
-        let _ = app.emit(
-            "scan:log",
-            ScanLog {
-                group: if g.id == last_group {
-                    String::new()
-                } else {
-                    g.name.to_string()
-                },
-                text: format!("{}\\{}", arch.dir(), name),
-                missing,
-                index,
-                total,
-            },
-        );
-        last_group = g.id;
-        // 一行一行地吐，太快了看不出在"跑"；368 个文件 × 2ms ≈ 0.7 秒
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    }
-
-    let rows: Vec<GroupInfo> = GROUPS
+    let rows: Vec<GroupInfo> = scanned
         .iter()
-        .map(|g| {
-            let (total, missing, _) = missing_of(&root, g.id);
+        .map(|(g, cases)| {
+            let total = cases.len();
+            let missing = cases.iter().filter(|c| c.st == St::Missing).count();
+            let abnormal = cases
+                .iter()
+                .filter(|c| matches!(c.st, St::Damaged | St::Older))
+                .count();
             GroupInfo {
                 id: g.id.into(),
                 name: g.name.into(),
-                note: if missing == 0 {
-                    "已齐全".into()
-                } else {
-                    format!("缺 {missing} 个")
-                },
+                note: note_of(missing, abnormal),
                 total,
                 missing,
+                abnormal,
             }
         })
         .collect();
 
     // 检测结果进日志：用户报"它说无需修复"时，看这一行就知道它到底查到了什么
-    let miss_total: usize = rows.iter().map(|r| r.missing).sum();
+    let miss_total: usize = rows.iter().map(|r| r.missing + r.abnormal).sum();
     log(&format!(
-        "检测完成：{total} 个文件，缺 {miss_total} 个（{}）",
+        "检测完成：{total} 个文件，要修 {miss_total} 个（{}）",
         rows.iter()
-            .filter(|r| r.missing > 0)
-            .map(|r| format!("{} 缺 {}", r.id, r.missing))
+            .filter(|r| r.missing + r.abnormal > 0)
+            .map(|r| format!("{} 缺 {} 异常 {}", r.id, r.missing, r.abnormal))
             .collect::<Vec<_>>()
             .join("，")
     ));
@@ -494,29 +703,43 @@ fn detect(app: AppHandle) -> Vec<GroupInfo> {
     rows
 }
 
+/// 右侧那一列的字：缺几个 / 异常几个 / 已齐全
+fn note_of(missing: usize, abnormal: usize) -> String {
+    match (missing, abnormal) {
+        (0, 0) => "已齐全".into(),
+        // 行里右半边就那么点地方，能省的字全省了
+        (0, n) => format!("异常 {n}"),
+        (m, 0) => format!("缺 {m}"),
+        (m, n) => format!("缺 {m} · 异常 {n}"),
+    }
+}
+
 #[tauri::command]
 fn install(app: AppHandle, rows: Vec<String>) {
     std::thread::spawn(move || run_repair(app, rows));
 }
 
-/// 某个分组缺了哪些文件——界面点开那一行时用
+/// 某个分组哪些文件不对（缺失 / 异常）——界面点开那一行时用
 #[tauri::command]
 fn missing_files(app: AppHandle, id: String) -> Vec<FileInfo> {
     let Some(root) = payload_root(&app) else {
         return Vec::new();
     };
-    let (_, _, missing) = missing_of(&root, &id);
     let mut out: Vec<FileInfo> = Vec::new();
-    for (arch, name) in missing {
-        match out.iter_mut().find(|f| f.name == name) {
-            Some(f) => match arch {
+    for c in inspect(&root, &id) {
+        if c.st == St::Ok {
+            continue;
+        }
+        match out.iter_mut().find(|f| f.name == c.name) {
+            Some(f) => match c.arch {
                 Arch::X86 => f.x86 = true,
                 Arch::X64 => f.x64 = true,
             },
             None => out.push(FileInfo {
-                name,
-                x86: arch == Arch::X86,
-                x64: arch == Arch::X64,
+                name: c.name,
+                x86: c.arch == Arch::X86,
+                x64: c.arch == Arch::X64,
+                why: c.why,
             }),
         }
     }
@@ -611,6 +834,7 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
             Done {
                 ok: false,
                 copied: 0,
+                repaired: 0,
                 skipped: 0,
                 pending_reboot: 0,
             },
@@ -619,15 +843,19 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
         return;
     };
 
-    // 先算总工作量：这次要处理多少个文件（只算缺的）
-    let mut plan: Vec<(&'static Group, Vec<(Arch, String)>)> = Vec::new();
+    // 先算总工作量：这次要处理多少个文件（缺的 + 异常的）
+    let mut plan: Vec<(&'static Group, Vec<(Arch, String, St)>)> = Vec::new();
     for id in &rows {
         let Some(g) = group_by_id(id) else { continue };
-        let (_, _, missing) = missing_of(&root, g.id);
-        if !missing.is_empty() {
-            plan.push((g, missing));
+        let todo: Vec<(Arch, String, St)> = inspect(&root, g.id)
+            .into_iter()
+            .filter(|c| c.st != St::Ok)
+            .map(|c| (c.arch, c.name, c.st))
+            .collect();
+        if !todo.is_empty() {
+            plan.push((g, todo));
         } else {
-            // 一行都不缺也要推一条，界面才会把它标成完成
+            // 一行都不用动也要推一条，界面才会把它标成完成
             let _ = app.emit(
                 "install:progress",
                 Progress {
@@ -644,29 +872,34 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
     let total: usize = plan.iter().map(|(_, f)| f.len()).sum();
     let mut index = 0usize;
     let mut copied = 0usize;
+    let mut repaired = 0usize;
     let mut failed = 0usize;
     let mut pending_reboot = 0usize;
 
     for (g, files) in &plan {
         log(&format!("开始 {} ({})", g.id, g.name));
         let mut last_error: Option<String> = None;
-        let mut locked: Vec<(Arch, String)> = Vec::new();
+        let mut locked: Vec<(Arch, String, St)> = Vec::new();
 
-        for (arch, name) in files {
+        for (arch, name, st) in files {
             let from = root.join(arch.dir()).join(name);
             let to = target_dir(*arch).join(name);
             let what = format!("{}\\{}", arch.dir(), name);
-            // 只补缺的：已经存在的文件一律不覆盖。
-            // 覆盖正在被别的程序加载的系统 dll 会失败（共享冲突），
-            // 而且这些文件是"按名字和版本共存"的，存在即正确。
+            // 缺的复制、异常的覆盖。这个计划里没有 Ok 的文件——
+            // 版本不低于 payload 的一律不碰，绝不降级。
             match std::fs::copy(&from, &to) {
                 Ok(_) => {
-                    copied += 1;
-                    log(&format!("补上 {what}"));
+                    if *st == St::Missing {
+                        copied += 1;
+                        log(&format!("补上 {what}"));
+                    } else {
+                        repaired += 1;
+                        log(&format!("覆盖 {what}"));
+                    }
                 }
                 Err(e) => {
                     log(&format!("{what} 被占用或写不进去：{e}"));
-                    locked.push((*arch, name.clone()));
+                    locked.push((*arch, name.clone(), *st));
                 }
             }
             index += 1;
@@ -687,7 +920,7 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
         if !locked.is_empty() {
             let paths: Vec<PathBuf> = locked
                 .iter()
-                .map(|(arch, name)| target_dir(*arch).join(name))
+                .map(|(arch, name, _)| target_dir(*arch).join(name))
                 .collect();
             let who = kill_lockers(&paths);
             if !who.is_empty() {
@@ -707,12 +940,16 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
                 std::thread::sleep(std::time::Duration::from_millis(900));
             }
 
-            for (arch, name) in locked {
+            for (arch, name, st) in locked {
                 let from = root.join(arch.dir()).join(&name);
                 let to = target_dir(arch).join(&name);
                 match std::fs::copy(&from, &to) {
                     Ok(_) => {
-                        copied += 1;
+                        if st == St::Missing {
+                            copied += 1;
+                        } else {
+                            repaired += 1;
+                        }
                         log(&format!("{name} 重试成功"));
                     }
                     Err(e) => {
@@ -757,13 +994,14 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
     }
 
     log(&format!(
-        "完成：复制 {copied} 个，失败 {failed} 个，待重启 {pending_reboot} 个"
+        "完成：补上 {copied} 个，覆盖 {repaired} 个，失败 {failed} 个，待重启 {pending_reboot} 个"
     ));
     let _ = app.emit(
         "install:done",
         Done {
             ok: failed == 0,
             copied,
+            repaired,
             skipped: 0,
             pending_reboot,
         },
@@ -830,6 +1068,12 @@ fn relaunch_elevated() -> bool {
 }
 
 pub fn run() {
+    // 暗门：--verify-hash 时额外逐字节比对（抓版本对、大小也对、内容坏了的）
+    if std::env::args().any(|a| a == "--verify-hash" || a == "--verify") {
+        VERIFY_HASH.store(true, Ordering::SeqCst);
+        log("已开启逐字节校验模式");
+    }
+
     tauri::Builder::default()
         .on_window_event(|_window, event| {
             // 复制中把关闭请求挡回去：Alt+F4、任务栏"关闭窗口"、我们自己的关闭键都会走到这里
@@ -862,3 +1106,7 @@ pub fn run() {
 // 解除占用那段的自测（cargo test）
 #[cfg(test)]
 mod lock_test;
+
+// 损坏判定那段的自测（cargo test）
+#[cfg(test)]
+mod scan_test;

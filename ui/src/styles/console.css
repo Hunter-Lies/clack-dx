@@ -698,6 +698,7 @@ svg {
 
 .row .cnt {
   flex: 0 0 auto;
+  margin-left: 8px;
   color: var(--beige-faint);
 }
 
@@ -748,6 +749,13 @@ svg {
   font-style: normal;
   font-size: 8.5px;
   color: var(--beige-faint);
+}
+
+/* 异常项：把原因（0 字节 / 版本 x < y）用橙色挑出来，和文件名分开 */
+.detail .file em {
+  margin-right: 5px;
+  font-style: normal;
+  color: var(--orange);
 }
 
 .detail .file.wait {

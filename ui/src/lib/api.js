@@ -48,8 +48,15 @@ const DEMO_FILES = {
   input: ["xinput1_1.dll", "xinput1_2.dll", "xinput1_3.dll", "xinput9_1_0.dll"],
 };
 
-/// 每个架构下缺几个（预览里前几个文件会标成"缺失"）
-const DEMO_MISSING = { dx9: 10, dx10: 7, dx11: 1, shader: 2, audio: 17, input: 0 };
+/// 预览用：每个架构下缺几个、异常几个（都是偶数，好平摊到 x86 / x64）
+export const DEMO_STATE = {
+  dx9: { missing: 8, bad: 2 },
+  dx10: { missing: 6, bad: 2 },
+  dx11: { missing: 2, bad: 0 },
+  shader: { missing: 4, bad: 0 },
+  audio: { missing: 16, bad: 2 },
+  input: { missing: 0, bad: 0 },
+};
 
 /// 检测。onLog 每查到一行调一次——界面上那屏"跑代码"就是它喂的。
 export async function detect(onLog) {
@@ -65,11 +72,21 @@ export async function detect(onLog) {
   let last = "";
   for (let i = 0; i < jobs.length; i++) {
     const { g, name, arch } = jobs[i];
-    const idx = (DEMO_FILES[g.id] ?? []).indexOf(name);
+    const list = DEMO_FILES[g.id] ?? [];
+    const idx = list.indexOf(name);
+    const missPerArch = (DEMO_STATE[g.id]?.missing ?? 0) / 2;
+    const badPerArch = (DEMO_STATE[g.id]?.bad ?? 0) / 2;
+    // 名单后面几个当"缺失"，再往前几个当"异常"
+    const state =
+      idx >= list.length - missPerArch
+        ? "missing"
+        : idx >= list.length - missPerArch - badPerArch
+          ? "bad"
+          : "ok";
     onLog?.({
       group: g.id === last ? "" : g.name,
       text: `${arch}\\${name}`,
-      missing: idx >= 0 && idx >= (DEMO_FILES[g.id].length - (DEMO_MISSING[g.id] ?? 0)),
+      state,
       index: i,
       total: jobs.length,
     });
@@ -79,15 +96,24 @@ export async function detect(onLog) {
 
   return GROUPS.map((g) => {
     const total = (DEMO_FILES[g.id] ?? []).length * 2;
-    const missing = (DEMO_MISSING[g.id] ?? 0) * 2;
+    const missing = DEMO_STATE[g.id]?.missing ?? 0;
+    const abnormal = DEMO_STATE[g.id]?.bad ?? 0;
     return {
       id: g.id,
       name: g.name,
-      note: missing === 0 ? "已齐全" : `缺 ${missing} 个`,
+      note: noteOf(missing, abnormal),
       total,
       missing,
+      abnormal,
     };
   });
+}
+
+export function noteOf(missing, abnormal) {
+  if (!missing && !abnormal) return "已齐全";
+  if (!missing) return `异常 ${abnormal}`;
+  if (!abnormal) return `缺 ${missing}`;
+  return `缺 ${missing} · 异常 ${abnormal}`;
 }
 
 export function onScanLog(cb) {
@@ -100,10 +126,18 @@ export function onScanLog(cb) {
 export function missingFiles(id) {
   if (inTauri) return invoke("missing_files", { id });
   const names = DEMO_FILES[id] ?? [];
-  const miss = DEMO_MISSING[id] ?? 0;
-  return Promise.resolve(
-    names.slice(names.length - miss).map((name) => ({ name, x86: true, x64: true })),
-  );
+  const miss = (DEMO_STATE[id]?.missing ?? 0) / 2;
+  const bad = (DEMO_STATE[id]?.bad ?? 0) / 2;
+  const out = [];
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i];
+    if (i >= names.length - miss - bad && i < names.length - miss) {
+      out.push({ name, x86: true, x64: true, why: "0 字节" });
+    } else if (i >= names.length - miss) {
+      out.push({ name, x86: true, x64: true, why: "" });
+    }
+  }
+  return Promise.resolve(out);
 }
 
 /// rows = 界面上那几行的 id（后端自己展开成 x86 / x64）

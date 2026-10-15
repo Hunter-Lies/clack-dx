@@ -5,6 +5,8 @@ import { setTheme } from "./lib/theme";
 import { closeWindow, inTauri, startDrag } from "./lib/window";
 import {
   GROUPS,
+  DEMO_STATE,
+  noteOf,
   detect,
   installComponents,
   isElevated,
@@ -15,7 +17,7 @@ import {
   requestElevation,
 } from "./lib/api";
 
-const VERSION = "v1.0.0";
+const VERSION = "v1.1.0";
 
 // 界面一共六步：待检测 -> 检测中 -> 报告 -> 修复中 -> 完成（fail 是修复没干净）
 const phase = ref("idle"); // idle | scan | report | busy | done | fail
@@ -30,6 +32,8 @@ const note = ref("");
 const pendingReboot = ref(0);
 /// 修完的交代：补了几个、花了多久
 const copied = ref(0);
+/// 覆盖回去的异常文件（损坏 / 旧版）
+const repaired = ref(0);
 const elapsed = ref(0);
 let startedAt = 0;
 
@@ -37,7 +41,10 @@ let offs = [];
 
 const percentText = computed(() => Math.round(percent.value));
 const missingTotal = computed(() =>
-  items.value.reduce((n, i) => n + (i.installed ? 0 : (i.missing ?? 0)), 0),
+  items.value.reduce(
+    (n, i) => n + (i.installed ? 0 : (i.missing ?? 0) + (i.abnormal ?? 0)),
+    0,
+  ),
 );
 const fileTotal = computed(() => items.value.reduce((n, i) => n + (i.total ?? 0), 0));
 
@@ -58,8 +65,10 @@ function fillRows(rows) {
     id: c.id,
     nm: c.name,
     ver: c.note,
-    installed: c.missing === 0,
+    // 又没缺又没异常的，直接标成完成：按下去也不会再动它们
+    installed: c.missing === 0 && (c.abnormal ?? 0) === 0,
     missing: c.missing,
+    abnormal: c.abnormal ?? 0,
     total: c.total,
     running: false,
   }));
@@ -73,13 +82,18 @@ if (import.meta.env.DEV) {
   if (q.get("open")) window.__openRow = q.get("open");
 
   const demoRows = () =>
-    GROUPS.map((g) => ({
-      id: g.id,
-      name: g.name,
-      note: "缺 12 个",
-      total: 40,
-      missing: 12,
-    }));
+    GROUPS.map((g) => {
+      const missing = DEMO_STATE[g.id]?.missing ?? 0;
+      const abnormal = DEMO_STATE[g.id]?.bad ?? 0;
+      return {
+        id: g.id,
+        name: g.name,
+        note: noteOf(missing, abnormal),
+        total: 40,
+        missing,
+        abnormal,
+      };
+    });
 
   if (q.get("phase") === "scan") {
     phase.value = "scan";
@@ -104,6 +118,7 @@ if (import.meta.env.DEV) {
     phase.value = "done";
     percent.value = 100;
     copied.value = Number(q.get("copied") ?? 6);
+    repaired.value = Number(q.get("repaired") ?? 0);
     elapsed.value = Number(q.get("secs") ?? 1.4);
     pendingReboot.value = Number(q.get("pending") ?? 0);
   } else if (q.get("state") === "busy") {
@@ -195,6 +210,7 @@ function handleDone(d) {
   percent.value = 100;
   pendingReboot.value = d.pending_reboot ?? 0;
   copied.value = d.copied ?? 0;
+  repaired.value = d.repaired ?? 0;
   elapsed.value = startedAt ? Math.round((performance.now() - startedAt) / 100) / 10 : 0;
   // 别立刻跳走：让用户看清最后几行变成"已齐全"、状态行收尾
   setTimeout(() => {
@@ -249,6 +265,7 @@ onBeforeUnmount(() => {
         :note="note"
         :pending-reboot="pendingReboot"
         :copied="copied"
+        :repaired="repaired"
         :elapsed="elapsed"
         :missing-total="missingTotal"
         :file-total="fileTotal"

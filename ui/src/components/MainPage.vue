@@ -23,6 +23,8 @@ const props = defineProps({
   pendingReboot: { type: Number, default: 0 },
   /// 这次补上了几个文件、花了多少秒（完成屏上交代一句）
   copied: { type: Number, default: 0 },
+  /// 其中覆盖回去的异常文件（损坏 / 旧版）
+  repaired: { type: Number, default: 0 },
   elapsed: { type: Number, default: 0 },
   missingTotal: { type: Number, default: 0 },
   fileTotal: { type: Number, default: 0 },
@@ -61,6 +63,14 @@ const verdict = computed(() => {
   if (props.phase === "busy") return `${Math.round(props.percent)}%`;
   if (props.phase === "done") return "已补齐";
   return allGood.value ? "系统齐全" : `缺 ${props.missingTotal} 个`;
+});
+
+/// 完成屏那句交代：补上几个、修好（覆盖）几个
+const doneLine = computed(() => {
+  const parts = [];
+  if (props.copied > 0) parts.push(`补上 ${props.copied} 个文件`);
+  if (props.repaired > 0) parts.push(`修好 ${props.repaired} 个损坏/旧版`);
+  return parts.length ? parts.join(" · ") : "本来就齐全";
 });
 
 // 点一行展开：看这一组到底缺哪些文件
@@ -146,7 +156,7 @@ if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("debu
         <div class="done-wrap">
           <FinishMark />
           <p class="after">
-            <b>{{ copied > 0 ? `补上 ${copied} 个文件` : "本来就齐全" }}</b><br />
+            <b>{{ doneLine }}</b><br />
             {{ fileTotal }} 个文件 · {{ items.length }} 组<template v-if="elapsed > 0"> · 用时 {{ elapsed }} 秒</template>
           </p>
           <p v-if="pendingReboot > 0" class="after warn">
@@ -181,10 +191,12 @@ if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("debu
             v-for="(l, i) in logLines"
             :key="i"
             class="l"
-            :class="{ head: l.head, bad: l.missing && !l.head }"
+            :class="{ head: l.head, bad: !l.head && l.state !== 'ok' }"
           >
             <span class="t">{{ l.text }}</span>
-            <span v-if="!l.head" class="f">{{ l.missing ? "缺失" : "ok" }}</span>
+            <span v-if="!l.head" class="f">
+              {{ l.state === "missing" ? "缺失" : l.state === "bad" ? "异常" : "ok" }}
+            </span>
           </div>
         </div>
       </template>
@@ -235,7 +247,8 @@ if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("debu
             <div v-if="openId === it.id" class="detail">
               <span v-if="loading" class="file wait">读取中…</span>
               <span v-for="f in detail" :key="f.name" class="file">
-                {{ f.name }}<i>{{ f.x86 && f.x64 ? "32/64" : f.x86 ? "32" : "64" }}</i>
+                <em v-if="f.why">{{ f.why }}</em>{{ f.name
+                }}<i>{{ f.x86 && f.x64 ? "32/64" : f.x86 ? "32" : "64" }}</i>
               </span>
             </div>
           </template>
