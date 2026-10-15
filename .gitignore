@@ -1,0 +1,28 @@
+# ---- 工作文件：微软二进制、拆包缓存、下载缓存、老运行库 ----
+# 这些都能按 docs\组件来源与校验.md 里的官方地址重新拉下来，不进仓库
+_work/
+
+# ---- 构建产物 / 依赖 ----
+ui/node_modules/
+ui/dist/
+ui/src-tauri/target/
+ui/src-tauri/gen/
+# tauri icon 会顺手生成移动端图标，这个项目只发 Windows
+ui/src-tauri/icons/android/
+ui/src-tauri/icons/ios/
+
+# ---- 构建输入：内嵌进 exe 的 payload 包 ----
+# 落点必须是源码树里的相对路径（Rust 的 include_bytes! 是编译期解析的）
+ui/src-tauri/payload.zip
+
+# ---- 本机配置：里面有我自己的代理地址 ----
+ui/src-tauri/.cargo/config.toml
+
+# ---- 调试留下的临时文件 ----
+_*
+ui/_*
+tools/_*
+*.log
+
+# ---- 出包目录（make_release.ps1 的产物）----
+out/

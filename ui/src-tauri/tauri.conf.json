@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ClackDX",
+  "version": "1.0.0",
+  "identifier": "com.hunter.clackdx",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://127.0.0.1:1430",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "咔哒 DX",
+        "width": 400,
+        "height": 576,
+        "resizable": false,
+        "maximizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "center": true
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "HUNTER",
+    "copyright": "© 2026 HunterLies",
+    "shortDescription": "咔哒 DX · DirectX 运行库修复",
+    "longDescription": "单文件 DirectX 运行库修复：把系统缺的 d3dx9 / d3dx10 / d3dx11 / XAudio / XInput 等文件补齐，不碰 VC++ 运行库。",
+    "resources": { "../../_work/payload": "payload" },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

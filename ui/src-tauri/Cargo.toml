@@ -1,0 +1,40 @@
+[package]
+name = "clackdx"
+version = "1.0.0"
+description = "咔哒 DX · DirectX 运行库修复"
+authors = ["HunterLies"]
+edition = "2021"
+
+[lib]
+name = "clackdx_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 正式版把整个 payload 以 zip 形式内嵌进 exe，首次运行解到 ProgramData
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Threading",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+# 不声明这个 feature 时 tauri 按 dev 编译，产物指向 devUrl
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

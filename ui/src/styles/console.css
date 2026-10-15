@@ -1,0 +1,557 @@
+/* 运行库合集 —— 视觉规范集中在这里，组件只负责结构。
+   沿用原框架的三色：炭灰（五级明度）、米白 #E9E1CF、国际橙 #FF4F00（语义 = 有动作）。
+   机身尺寸必须和窗口尺寸一致（--W / --H）。深色是默认值，浅色覆盖在下面。 */
+:root {
+  --beige: #e9e1cf;
+  --beige-dim: rgba(233, 225, 207, 0.78);
+  --beige-faint: rgba(233, 225, 207, 0.45);
+  --orange: #ff4f00;
+  --char-0: #191917;
+  --char-1: #20201e;
+  --char-2: #292926;
+  --char-3: #383834;
+
+  --edge: rgba(233, 225, 207, 0.16);
+  --edge-top: rgba(233, 225, 207, 0.2);
+  --edge-bottom: rgba(0, 0, 0, 0.5);
+  --hairline: rgba(233, 225, 207, 0.07);
+  --unit-top: rgba(233, 225, 207, 0.1);
+  --inset: rgba(0, 0, 0, 0.6);
+  --raised: rgba(0, 0, 0, 0.7);
+  --raised-sm: rgba(0, 0, 0, 0.45);
+  --hover: rgba(233, 225, 207, 0.06);
+  --hover-2: rgba(233, 225, 207, 0.1);
+
+  --screen-inset: rgba(0, 0, 0, 0.9);
+  --screen-top: rgba(233, 225, 207, 0.07);
+  --screen-line: rgba(233, 225, 207, 0.02);
+  --screen-vignette: rgba(0, 0, 0, 0.6);
+
+  /* 机身：模压塑料的顶亮底暗 + 底下的厚度 */
+  --shell-hi: #30302c;
+  --shell-lo: #232321;
+  --shell-lip: #121210;
+
+  /* 状态语义色：等 = 中性，跑 = 橙，完 = 米白 */
+  --ok: rgba(233, 225, 207, 0.85);
+  --run: var(--orange);
+  --idle: rgba(233, 225, 207, 0.28);
+  --glow: rgba(255, 79, 0, 0.45);
+  --led-off: rgba(233, 225, 207, 0.16);
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  /* 机身尺寸。窗口开成 --W + 2*--PAD × --H + --PAD + --PAD-BOTTOM。
+     下边留的这一点是给机身厚度和投影的：投影铺不出窗口就会被切出硬边，
+     所以它必须比投影的实际外扩范围大。 */
+  --PAD: 6px;
+  --PAD-BOTTOM: 22px;
+  --W: 388px;
+  --H: 548px;
+}
+
+/* 浅色：机身暖米白，文字反过来用炭灰，橙色作为强调色不动。
+   屏幕比机身暗一档（内嵌感）。 */
+:root[data-theme="light"] {
+  --beige: #2a2a26;
+  --beige-dim: rgba(42, 42, 38, 0.72);
+  --beige-faint: rgba(42, 42, 38, 0.45);
+  --char-0: #d9d3c6;
+  --char-1: #e1dbd0;
+  --char-2: #ece6da;
+  --char-3: #f8f4ea;
+
+  --edge: rgba(42, 42, 38, 0.14);
+  --edge-top: rgba(255, 255, 255, 0.7);
+  --edge-bottom: rgba(42, 42, 38, 0.16);
+  --hairline: rgba(42, 42, 38, 0.12);
+  --unit-top: rgba(255, 255, 255, 0.8);
+  --inset: rgba(42, 42, 38, 0.16);
+  --raised: rgba(42, 42, 38, 0.22);
+  --raised-sm: rgba(42, 42, 38, 0.16);
+  --hover: rgba(42, 42, 38, 0.05);
+  --hover-2: rgba(42, 42, 38, 0.09);
+
+  --screen-inset: rgba(42, 42, 38, 0.1);
+  --screen-top: rgba(255, 255, 255, 0.6);
+  --screen-line: rgba(42, 42, 38, 0.03);
+  --screen-vignette: rgba(42, 42, 38, 0.14);
+
+  --shell-hi: #f4efe4;
+  --shell-lo: #e6e0d4;
+  --shell-lip: #c6bfb0;
+
+  --ok: rgba(42, 42, 38, 0.85);
+  --idle: rgba(42, 42, 38, 0.28);
+  --led-off: rgba(42, 42, 38, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  letter-spacing: 0;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+svg {
+  display: block;
+}
+
+.stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  padding: var(--PAD) var(--PAD) var(--PAD-BOTTOM);
+  background: transparent;
+}
+
+/* ---------- 机身 ---------- */
+.console {
+  position: relative;
+  z-index: 2;
+  color: var(--beige);
+  width: var(--W);
+  height: var(--H);
+  padding: 18px 22px 24px;
+  display: flex;
+  flex-direction: column;
+  /* 顶面亮一档、往下压回来：塑料壳的模压感，不是一块纯色板 */
+  background: linear-gradient(180deg, var(--shell-hi), var(--shell-lo) 62%);
+  border-radius: 16px;
+  overflow: hidden;
+  /* 内圈是壳的倒角高光/暗边，外面那两道才是"厚度 + 落地投影"，
+     和按钮用的是同一套语言（底边实色 + 投影），所以整机看起来是一块东西。 */
+  /* 投射按 Windows 自己那套来：贴地的窄影 + 一层很淡的大影，
+     不做又大又黑的投影（那种在浅色桌面上像块污渍）。 */
+  box-shadow: inset 0 0 0 1px var(--edge),
+    inset 0 1px 0 var(--edge-top),
+    inset 0 -1px 0 var(--edge-bottom),
+    0 4px 0 var(--shell-lip),
+    0 3px 7px rgba(0, 0, 0, 0.35),
+    0 8px 16px -6px var(--raised-sm);
+}
+
+/* 屏幕上沿的品牌条：左边字标，右边电源指示 */
+.plate {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 26px;
+  margin-bottom: 14px;
+}
+
+.plate .mark {
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--beige-dim);
+}
+
+/* 英文副标：排在中文正名后面，压一档，像设备上的中英双标 */
+.plate .latin {
+  margin-left: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--beige-faint);
+}
+
+.plate .ver {
+  margin-left: 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--beige-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 机身右上角的关闭键 */
+.plate .xbtn {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--beige-dim);
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.plate .xbtn:hover {
+  background: var(--hover-2);
+  color: var(--beige);
+}
+
+/* 安装中：关闭键压暗、去掉悬停反馈，光标也不再是手型——一眼看出现在点不动 */
+.plate .xbtn:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+
+.plate .xbtn:disabled:hover {
+  background: none;
+  color: var(--beige-dim);
+}
+
+/* ---------- 屏幕 ---------- */
+.screen {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  background: var(--char-0);
+  box-shadow: inset 0 0 36px var(--screen-inset),
+    inset 0 1px 0 var(--screen-top);
+}
+
+/* 扫描线 + 渐晕：让"屏幕"有玻璃感，不做整体渐变背景 */
+.screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 12px;
+  background: repeating-linear-gradient(
+      0deg,
+      var(--screen-line) 0 1px,
+      transparent 1px 3px
+    ),
+    radial-gradient(
+      130% 120% at 50% 46%,
+      transparent 42%,
+      var(--screen-vignette) 100%
+    );
+}
+
+.screen > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- 组件清单 ---------- */
+.rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 15px 12px;
+  scrollbar-width: none;
+}
+
+.rows::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* 只有真的装不下时才渐隐底部提示可滚 */
+.rows.scrollable {
+  mask-image: linear-gradient(#000 calc(100% - 22px), transparent);
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 22px), transparent);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.row .dot {
+  flex: 0 0 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--idle);
+  transition: background 0.25s var(--ease), box-shadow 0.25s var(--ease);
+}
+
+.row .nm {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--beige-faint);
+  transition: color 0.25s var(--ease);
+}
+
+.row .ver {
+  flex: 0 0 auto;
+  color: var(--beige-faint);
+}
+
+.row.run .nm,
+.row.run .ver {
+  color: var(--beige);
+}
+
+.row.run .dot {
+  background: var(--run);
+  box-shadow: 0 0 8px var(--glow);
+}
+
+.row.done .nm {
+  color: var(--beige-dim);
+}
+
+.row.done .dot {
+  background: var(--ok);
+}
+
+/* ---------- 屏幕底部状态行 ---------- */
+.status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 15px;
+  box-shadow: inset 0 1px 0 var(--hairline);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--beige-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.status .pct {
+  margin-left: auto;
+  color: var(--beige);
+}
+
+/* 进度条：只在跑的时候占位，静态时是一条发丝线 */
+.bar {
+  flex: 0 0 84px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--hairline);
+  overflow: hidden;
+}
+
+.bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: var(--orange);
+  box-shadow: 0 0 8px var(--glow);
+  transition: width 0.35s var(--ease);
+}
+
+/* ---------- 装完那一屏 ---------- */
+.finish {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: mark-in 0.3s var(--ease) both;
+}
+
+/* 光晕用圆形径向渐变铺，不用 SVG 的 drop-shadow：
+   后者的滤镜区域是圆的包围盒（方形），模糊出来的光会被裁出一个方框边。 */
+.finish::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 170px;
+  height: 170px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--glow) 0%, transparent 68%);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.finish .mark {
+  position: relative;
+  width: 104px;
+  height: 104px;
+}
+
+/* 圈：淡橙底 + 橙描边，一进屏就是整块屏幕里唯一亮的东西 */
+.finish .mark .ring {
+  fill: rgba(255, 79, 0, 0.09);
+  stroke: var(--orange);
+  stroke-width: 2.4;
+}
+
+/* 勾：走一遍描边，落定在圈里 */
+.finish .mark .tick {
+  fill: none;
+  stroke: var(--orange);
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 28;
+  stroke-dashoffset: 28;
+  animation: tick-draw 0.34s var(--ease) 0.12s forwards;
+}
+
+@keyframes mark-in {
+  from {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+}
+
+@keyframes tick-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* 标题条以下、按钮以上的整块内容 */
+.page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---------- 唯一那个按钮 ---------- */
+/* 屏幕与按键之间的印刷带：字要压得很低，是"印在壳上"的，不是界面元素 */
+.print {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  padding: 0 3px;
+  margin-top: 13px;
+}
+
+.print .by {
+  font-size: 11px;
+  color: var(--beige-faint);
+}
+
+.print .by b {
+  font-weight: 600;
+  color: var(--beige-dim);
+}
+
+/* 印刷带右侧的两个跳转键靠右收成一排 */
+.print .links {
+  margin-left: auto;
+  margin-right: -6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 印刷带右侧的跳转键。做成实底小胶囊：印刷带上的字都是压低的灰，
+   这里必须靠"有底色 + 有描边 + 有文字"三个信号才能一眼看出是能点的东西。 */
+.print .jump {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 7px;
+  background: var(--char-3);
+  box-shadow: inset 0 1px 0 var(--unit-top), inset 0 0 0 1px var(--hairline);
+  color: var(--beige-dim);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s var(--ease), filter 0.15s var(--ease),
+    transform 0.12s var(--ease);
+}
+
+/* 图标点一个强调色：这一条带子上其它字都是印刷灰，只有它是"能点的" */
+.print .jump svg {
+  color: var(--orange);
+}
+
+.print .jump:hover {
+  color: var(--beige);
+  filter: brightness(1.22);
+}
+
+.print .jump:active {
+  transform: translateY(1px);
+}
+
+.print .jump:focus-visible {
+  outline: 2px solid var(--beige);
+  outline-offset: 2px;
+}
+
+.deck {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+}
+
+.install {
+  position: relative;
+  width: 100%;
+  height: 56px;
+  border: none;
+  border-radius: 11px;
+  background: var(--orange);
+  color: #1a1512;
+  font-size: 15.5px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 5px 0 #a83400, 0 11px 20px var(--raised-sm),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transition: transform 0.12s var(--ease), box-shadow 0.12s var(--ease),
+    filter 0.2s var(--ease);
+}
+
+.install:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.install:active:not(:disabled) {
+  transform: translateY(5px);
+  box-shadow: 0 0 0 #a83400, 0 3px 8px var(--raised-sm),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.install:disabled {
+  cursor: default;
+  background: var(--char-3);
+  color: var(--beige-dim);
+  box-shadow: 0 4px 0 var(--char-0), 0 8px 16px var(--raised-sm),
+    inset 0 1px 0 var(--unit-top);
+}
+
+.install:focus-visible {
+  outline: 2px solid var(--beige);
+  outline-offset: 3px;
+}
+

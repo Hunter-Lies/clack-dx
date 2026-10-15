@@ -1,0 +1,23 @@
+# 统一行尾，免得以后 diff 里全是换行符变动
+* text=auto
+
+# Windows 脚本保持 CRLF（记事本、PowerShell 双击都好使）
+*.ps1    text eol=crlf
+*.cmd    text eol=crlf
+*.bat    text eol=crlf
+
+# 源码与文档统一 LF
+*.rs     text eol=lf
+*.vue    text eol=lf
+*.js     text eol=lf
+*.css    text eol=lf
+*.html   text eol=lf
+*.json   text eol=lf
+*.svg    text eol=lf
+*.md     text eol=lf
+*.toml   text eol=lf
+
+# 图标等二进制别当文本处理
+*.png    binary
+*.ico    binary
+*.icns   binary
