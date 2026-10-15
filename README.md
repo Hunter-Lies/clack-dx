@@ -22,18 +22,13 @@
 
 x86 装进 `SysWOW64`（32 位游戏读这里），x64 装进 `System32`。
 
-只补系统里缺的那些，已存在的一律不覆盖。全程离线，不驻留、不自启、不注册服务。
+只补系统里缺的那些，已存在的一律不覆盖。**只动 DirectX 的 dll，不碰 VC++ 运行库**——那归[咔哒 / Clack](https://github.com/Hunter-Lies/clack) 管。
+
+全程离线，不驻留、不自启、不注册服务。
 
 </td>
 </tr>
 </table>
-
-## 和 DirectX 修复工具的区别
-
-那类工具除了补 DX 的 dll，还会"顺带"装一遍它自带的 VC++ 运行库——那是 14.29（2021 年）的老版本，
-点一次就把系统里新的顶掉了。这工具只做一件事：
-
-**只补 DirectX 的 dll，不碰 VC++ 运行库。** 运行库请用 [咔哒 / Clack](https://github.com/Hunter-Lies/clack)，那边带的是最新版（14.51）。
 
 ## 用法
 
@@ -85,5 +80,7 @@ Tauri 2 + Rust 后端，WebView2 承载 Vue 3 界面，Vite 构建：Tauri `2.12
 ## 许可
 
 本仓库代码采用 [CC BY-NC-SA 4.0](LICENSE)：署名、非商业、相同方式共享。
+
+注意这是**源码公开**，不是 OSI 认可的开源许可——非商业性使用这条限制，让它不符合开源定义。
 
 图标取自 [Lucide](https://lucide.dev)（ISC）；补进系统的那些 dll 版权归 Microsoft，不在本仓库里。
