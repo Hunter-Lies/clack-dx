@@ -424,11 +424,26 @@ fn fmt_ver(v: [u32; 4]) -> String {
     format!("{}.{}.{}.{}", v[0], v[1], v[2], v[3])
 }
 
+/// Windows 自己管的文件：版本号跟着系统版本走，和 DX 分发包那套编号不是一个体系。
+/// 拿 `xinput9_1_0.dll` 说事：系统里那份是 10.0.26100 的存根（微软签名，9 KB），
+/// payload 里是 2005 年 DX 分发包的 9.10.455（61 KB）——按"版本更低就覆盖"会得出
+/// "把现代系统组件换成二十年前的老文件"的荒唐结论。这类文件一律不报、不碰。
+const OS_OWNED: &[&str] = &["xinput9_1_0.dll"];
+
 /// 扫一组：给出每个文件的状态。--verify-hash 开着时，对"版本看着没问题"的
 /// 再逐字节比一遍，抓版本对、大小也对、但内容坏了的静默损坏。
 fn inspect(root: &Path, id: &str) -> Vec<Case> {
     let mut out = Vec::new();
     for (arch, name) in group_files(root, id) {
+        if OS_OWNED.contains(&name.to_ascii_lowercase().as_str()) {
+            out.push(Case {
+                arch,
+                name,
+                st: St::Ok,
+                why: String::new(),
+            });
+            continue;
+        }
         let from = root.join(arch.dir()).join(&name);
         let to = target_dir(arch).join(&name);
         let psize = std::fs::metadata(&from).map(|m| m.len()).unwrap_or(0);

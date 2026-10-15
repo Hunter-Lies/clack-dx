@@ -21,9 +21,13 @@ mod tests {
         let file = dir.join("locked.dll");
         std::fs::write(&file, b"test").unwrap();
 
+        // 子进程锁上文件之后写个 ready 标记，测试等标记——不要靠"睡几秒应该够了"，
+        // 杀毒软件扫新构建的测试二进制时，powershell 启动可能要十几秒。
+        let ready = dir.join("ready.txt");
         let script = format!(
-            "$s=[System.IO.File]::Open('{0}','Open','Read','None'); Start-Sleep -Seconds 30",
-            file.display()
+            "$s=[System.IO.File]::Open('{0}','Open','Read','None'); [System.IO.File]::WriteAllText('{1}',''); Start-Sleep -Seconds 60",
+            file.display(),
+            ready.display()
         );
         let errfile = dir.join("child.err");
         let mut child = Command::new("powershell")
@@ -34,11 +38,18 @@ mod tests {
             .spawn()
             .expect("起不来 powershell");
 
-        // 等它把文件打开
-        std::thread::sleep(std::time::Duration::from_millis(1500));
+        // 等它真锁上（最多 60 秒，正常一两秒）
+        let mut waited = 0;
+        while !ready.is_file() && waited < 600 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            waited += 1;
+        }
+        assert!(ready.is_file(), "子进程 60 秒都没锁上文件");
+
+        // 确认它真的锁住了：这一下复制必须失败（共享冲突）
+        let conflict = std::fs::copy(&file, dir.join("copy-target.dll")).is_err();
 
         // 2) 这一步以前会因共享冲突失败——正是我们要模拟的现场
-        let conflict = std::fs::copy(&file, dir.join("copy-target.dll")).is_err();
         println!("先确认它真被占住了：复制报错 = {conflict}");
         if !conflict {
             println!("子进程还活着吗：{}", child.try_wait().unwrap().is_none());

@@ -3,7 +3,7 @@
 // 跑法：cargo test --manifest-path ui\src-tauri\Cargo.toml -- --nocapture
 #[cfg(all(test, windows))]
 mod tests {
-    use crate::{classify, file_version, St};
+    use crate::{classify, file_version, inspect, St};
     use std::path::Path;
 
     const VER: [u32; 4] = [9, 29, 952, 3111];
@@ -84,5 +84,36 @@ mod tests {
         assert_eq!(file_version(&dir.join("nope.dll")), None);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 拿真系统扫一遍：这台机器上 DX 是齐的，结果应该是"一个都不缺、一个都不异常"。
+    /// 反过来，如果版本读法有问题（比如把带后缀的 FileVersion 当版本比），
+    /// 这里会冒出一堆"异常"，一眼就能看出来。
+    #[test]
+    fn scans_this_machine() {
+        let payload = Path::new(r"..\..\_work\payload");
+        if !payload.is_dir() {
+            println!("跳过：找不到 payload 目录 {payload:?}");
+            return;
+        }
+        let mut missing = 0;
+        let mut bad = 0;
+        let mut total = 0;
+        for id in ["dx9", "dx10", "dx11", "shader", "audio", "input"] {
+            for c in inspect(payload, id) {
+                total += 1;
+                match c.st {
+                    St::Missing => missing += 1,
+                    St::Damaged | St::Older => {
+                        bad += 1;
+                        println!("异常：{} {} -> {}", c.arch.dir(), c.name, c.why);
+                    }
+                    St::Ok => {}
+                }
+            }
+        }
+        println!("扫了 {total} 个文件：缺 {missing}，异常 {bad}");
+        assert_eq!(total, 184, "payload 里应该是 184 个文件");
+        assert_eq!((missing, bad), (0, 0), "这台机器上 DX 是齐的，不该报缺失或异常");
     }
 }
