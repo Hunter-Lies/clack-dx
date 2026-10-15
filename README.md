@@ -43,10 +43,13 @@ x86 装进 `SysWOW64`（32 位游戏读这里），x64 装进 `System32`。
 | 位置 | 内容 |
 |---|---|
 | `C:\Windows\SysWOW64`、`C:\Windows\System32` | 补进去的 DX dll，只补缺的 |
-| `C:\ProgramData\ClackDX\payload\<版本>\` | 解出来的 184 个 dll，约 222 MB，首次运行解一次 |
+| `C:\ProgramData\ClackDX\payload\<版本>\` | 解出来的 184 个 dll，约 222 MB；只在运行期间存在，关掉窗口自动删 |
 | `%TEMP%\ClackDX.log` | 运行日志 |
 
-清理：删 exe，删 `C:\ProgramData\ClackDX\`。补进系统目录的那些文件不建议手动删——删了游戏又会缺，
+程序退出时会清掉那 222 MB。只有被任务管理器强杀（或崩溃）时才可能留下
+`C:\ProgramData\ClackDX\`，手动删掉即可。
+
+清理：删 exe。补进系统目录的那些文件不建议手动删——删了游戏又会缺，
 而它们本来就是微软的可再发行组件，留着是对的。
 
 ## 问题

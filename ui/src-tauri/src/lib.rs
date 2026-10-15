@@ -13,6 +13,9 @@ use tauri::{AppHandle, Emitter, Manager};
 /// 复制进行中。这段时间不允许关窗口。
 static BUSY: AtomicBool = AtomicBool::new(false);
 
+/// 正在用管理员身份重新拉起自己。这时候别清 payload——下一个进程还要用。
+static RELAUNCHING: AtomicBool = AtomicBool::new(false);
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Arch {
@@ -183,6 +186,26 @@ fn ensure_payload() -> Option<PathBuf> {
     }
     std::fs::write(dir.join(".ok"), env!("CARGO_PKG_VERSION")).ok();
     Some(dir)
+}
+
+/// 退出前把解出来的 payload 删掉：那 222 MB 只在运行期间有用，
+/// 留着白占地方。下次启动会重新解一遍（一两秒）。
+/// 强杀进程（任务管理器）时来不及跑，那种情况会留下目录，README 里写了怎么手动删。
+fn cleanup_payload() {
+    if RELAUNCHING.load(Ordering::SeqCst) {
+        return;
+    }
+    let dir = std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:\\ProgramData"))
+        .join("ClackDX")
+        .join("payload");
+    if dir.is_dir() {
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => log(&format!("已清理 {}", dir.display())),
+            Err(e) => log(&format!("清理 {} 失败：{e}", dir.display())),
+        }
+    }
 }
 
 fn windir() -> PathBuf {
@@ -514,6 +537,7 @@ fn is_elevated() -> bool {
 /// 那就直接结束自己。
 #[tauri::command]
 fn quit() {
+    cleanup_payload();
     std::process::exit(0);
 }
 
@@ -789,6 +813,9 @@ fn relaunch_elevated() -> bool {
     let file = wide(&exe.to_string_lossy());
     let params = wide("--elevated");
 
+    // 拉起新进程后本进程就要退场了，这时候不能清 payload：
+    // 新进程还要用它（而且会自己负责退出时清理）
+    RELAUNCHING.store(true, Ordering::SeqCst);
     unsafe {
         let r = ShellExecuteW(
             std::ptr::null_mut(),
@@ -822,8 +849,14 @@ pub fn run() {
             open_url,
             quit
         ])
-        .run(tauri::generate_context!())
-        .expect("启动失败");
+        .build(tauri::generate_context!())
+        .expect("启动失败")
+        .run(|_app, event| {
+            // 正常关窗口也走到这儿——把解出来的 payload 收走
+            if let tauri::RunEvent::Exit = event {
+                cleanup_payload();
+            }
+        });
 }
 
 // 解除占用那段的自测（cargo test）
