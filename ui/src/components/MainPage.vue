@@ -21,6 +21,9 @@ const props = defineProps({
   note: { type: String, default: "" },
   /// 被占用到杀不掉、安排成"重启后替换"的文件数
   pendingReboot: { type: Number, default: 0 },
+  /// 这次补上了几个文件、花了多少秒（完成屏上交代一句）
+  copied: { type: Number, default: 0 },
+  elapsed: { type: Number, default: 0 },
   missingTotal: { type: Number, default: 0 },
   fileTotal: { type: Number, default: 0 },
   logLines: { type: Array, default: () => [] },
@@ -140,10 +143,16 @@ if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("debu
     <ScreenPanel>
       <!-- 修完只留一个圈打勾 -->
       <template v-if="phase === 'done'">
-        <FinishMark />
-        <p v-if="pendingReboot > 0" class="after">
-          {{ pendingReboot }} 个文件正被占用，已安排重启后替换
-        </p>
+        <div class="done-wrap">
+          <FinishMark />
+          <p class="after">
+            <b>{{ copied > 0 ? `补上 ${copied} 个文件` : "本来就齐全" }}</b><br />
+            {{ fileTotal }} 个文件 · {{ items.length }} 组<template v-if="elapsed > 0"> · 用时 {{ elapsed }} 秒</template>
+          </p>
+          <p v-if="pendingReboot > 0" class="after warn">
+            {{ pendingReboot }} 个文件正被占用，已安排重启后替换
+          </p>
+        </div>
       </template>
 
       <!-- 一、还没检测 -->

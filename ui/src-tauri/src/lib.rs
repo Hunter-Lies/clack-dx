@@ -439,7 +439,7 @@ fn detect(app: AppHandle) -> Vec<GroupInfo> {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
 
-    GROUPS
+    let rows: Vec<GroupInfo> = GROUPS
         .iter()
         .map(|g| {
             let (total, missing, _) = missing_of(&root, g.id);
@@ -455,7 +455,20 @@ fn detect(app: AppHandle) -> Vec<GroupInfo> {
                 missing,
             }
         })
-        .collect()
+        .collect();
+
+    // 检测结果进日志：用户报"它说无需修复"时，看这一行就知道它到底查到了什么
+    let miss_total: usize = rows.iter().map(|r| r.missing).sum();
+    log(&format!(
+        "检测完成：{total} 个文件，缺 {miss_total} 个（{}）",
+        rows.iter()
+            .filter(|r| r.missing > 0)
+            .map(|r| format!("{} 缺 {}", r.id, r.missing))
+            .collect::<Vec<_>>()
+            .join("，")
+    ));
+
+    rows
 }
 
 #[tauri::command]
@@ -618,17 +631,22 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
         for (arch, name) in files {
             let from = root.join(arch.dir()).join(name);
             let to = target_dir(*arch).join(name);
+            let what = format!("{}\\{}", arch.dir(), name);
             // 只补缺的：已经存在的文件一律不覆盖。
             // 覆盖正在被别的程序加载的系统 dll 会失败（共享冲突），
             // 而且这些文件是"按名字和版本共存"的，存在即正确。
             match std::fs::copy(&from, &to) {
-                Ok(_) => copied += 1,
+                Ok(_) => {
+                    copied += 1;
+                    log(&format!("补上 {what}"));
+                }
                 Err(e) => {
-                    log(&format!("{name} 被占用或写不进去：{e}"));
+                    log(&format!("{what} 被占用或写不进去：{e}"));
                     locked.push((*arch, name.clone()));
                 }
             }
             index += 1;
+            // 正在补哪个文件也推给界面，状态行上滚动显示，不至于盯着一个百分比干等
             let _ = app.emit(
                 "install:progress",
                 Progress {
@@ -636,7 +654,7 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
                     state: "run",
                     index,
                     total,
-                    message: None,
+                    message: Some(what),
                 },
             );
         }

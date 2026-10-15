@@ -28,6 +28,10 @@ const lastError = ref("");
 const note = ref("");
 /// 被占用到杀不掉、只能重启后替换的文件数
 const pendingReboot = ref(0);
+/// 修完的交代：补了几个、花了多久
+const copied = ref(0);
+const elapsed = ref(0);
+let startedAt = 0;
 
 let offs = [];
 
@@ -95,11 +99,17 @@ if (import.meta.env.DEV) {
     phase.value = "report";
     fillRows(demoRows());
   } else if (q.get("state") === "done") {
+    fillRows(demoRows());
+    items.value.forEach((it) => (it.installed = true));
     phase.value = "done";
     percent.value = 100;
+    copied.value = Number(q.get("copied") ?? 6);
+    elapsed.value = Number(q.get("secs") ?? 1.4);
+    pendingReboot.value = Number(q.get("pending") ?? 0);
   } else if (q.get("state") === "busy") {
     phase.value = "busy";
     fillRows(demoRows());
+    note.value = q.get("note") ?? "x86\\d3dx9_43.dll";
     const at = Number(q.get("at") ?? 3);
     items.value.forEach((it, i) => {
       it.installed = i < at;
@@ -137,8 +147,11 @@ async function runRepair() {
   lastError.value = "";
   note.value = "";
   pendingReboot.value = 0;
+  copied.value = 0;
+  elapsed.value = 0;
   percent.value = 0;
   phase.value = "busy";
+  startedAt = performance.now();
   await installComponents(ids);
 }
 
@@ -181,8 +194,13 @@ function handleProgress(p) {
 function handleDone(d) {
   percent.value = 100;
   pendingReboot.value = d.pending_reboot ?? 0;
-  note.value = "";
-  phase.value = d.ok ? "done" : "fail";
+  copied.value = d.copied ?? 0;
+  elapsed.value = startedAt ? Math.round((performance.now() - startedAt) / 100) / 10 : 0;
+  // 别立刻跳走：让用户看清最后几行变成"已齐全"、状态行收尾
+  setTimeout(() => {
+    note.value = "";
+    phase.value = d.ok ? "done" : "fail";
+  }, 900);
 }
 
 // 关闭键走 mousedown 而不是 click：别的程序会抢焦点，那一下点击可能只用来激活窗口。
@@ -230,6 +248,8 @@ onBeforeUnmount(() => {
         :error="lastError"
         :note="note"
         :pending-reboot="pendingReboot"
+        :copied="copied"
+        :elapsed="elapsed"
         :missing-total="missingTotal"
         :file-total="fileTotal"
         :log-lines="logLines"
