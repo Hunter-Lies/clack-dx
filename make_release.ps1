@@ -44,7 +44,14 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 $exe = Join-Path $Ui 'src-tauri\target\release\clackdx.exe'
 $dst = Join-Path $OutDir '咔哒DX-DirectX修复.exe'
 Copy-Item -LiteralPath $exe -Destination $dst -Force
+
+# Release 附件用纯 ASCII 名字，版本号从 tauri.conf.json 里读，免得两处对不上
+$version = (Get-Content (Join-Path $Ui 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json).version
+$ascii = Join-Path $OutDir ("ClackDX-{0}-x64.exe" -f $version)
+Copy-Item -LiteralPath $exe -Destination $ascii -Force
+
 Write-Host ("`n单文件 exe: {0}  ({1:N1} MB)" -f $dst, ((Get-Item $dst).Length / 1MB))
+Write-Host ("发布用:     {0}" -f $ascii)
 
 # 4) 自检：这个 exe 自己不能依赖 VC++ 运行库，否则在缺库的机器上起不来（那就成了先有鸡还是先有蛋）
 & (Join-Path $Root 'tools\check_deps.ps1') -Exe $dst

@@ -47,8 +47,9 @@
      所以它必须比投影的实际外扩范围大。 */
   --PAD: 6px;
   --PAD-BOTTOM: 22px;
-  --W: 388px;
-  --H: 548px;
+  /* 横向机身：窗口 720×480 = W + 2*PAD × H + PAD + PAD-BOTTOM */
+  --W: 708px;
+  --H: 452px;
 }
 
 /* 浅色：机身暖米白，文字反过来用炭灰，橙色作为强调色不动。
@@ -134,7 +135,8 @@ svg {
   color: var(--beige);
   width: var(--W);
   height: var(--H);
-  padding: 18px 22px 24px;
+  /* 四边一律 16：机身内边距、屏幕↔面板的缝、屏幕内边距都是这一档 */
+  padding: 16px;
   display: flex;
   flex-direction: column;
   /* 顶面亮一档、往下压回来：塑料壳的模压感，不是一块纯色板 */
@@ -162,12 +164,16 @@ svg {
   margin-bottom: 14px;
 }
 
-.plate .mark {
-  font-size: 13.5px;
-  font-weight: 600;
-  letter-spacing: 0;
-  color: var(--beige-dim);
+/* 铭牌搬进右侧面板后不再占一整行，间距交给面板的 gap */
+.deck .plate {
+  height: 32px;
+  margin-bottom: 0;
 }
+/* 面板就这么点东西，尺寸统统一档 */
+.deck .plate .mark { font-size: 18px; font-weight: 800; color: var(--beige); }
+.deck .plate .latin { margin-left: 7px; font-size: 14px; }
+.deck .plate .ver { margin-left: 8px; font-size: 11.5px; }
+.deck .plate .xbtn { width: 30px; height: 30px; border-radius: 8px; }
 
 /* 英文副标：排在中文正名后面，压一档，像设备上的中英双标 */
 .plate .latin {
@@ -221,6 +227,7 @@ svg {
 .screen {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -262,7 +269,7 @@ svg {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 14px 15px 12px;
+  padding: 13px 16px 12px;
   scrollbar-width: none;
 }
 
@@ -326,45 +333,6 @@ svg {
 
 .row.done .dot {
   background: var(--ok);
-}
-
-/* ---------- 屏幕底部状态行 ---------- */
-.status {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 40px;
-  padding: 0 15px;
-  box-shadow: inset 0 1px 0 var(--hairline);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  color: var(--beige-dim);
-  font-variant-numeric: tabular-nums;
-}
-
-.status .pct {
-  margin-left: auto;
-  color: var(--beige);
-}
-
-/* 进度条：只在跑的时候占位，静态时是一条发丝线 */
-.bar {
-  flex: 0 0 84px;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--hairline);
-  overflow: hidden;
-}
-
-.bar i {
-  display: block;
-  height: 100%;
-  width: 0;
-  border-radius: 2px;
-  background: var(--orange);
-  box-shadow: 0 0 8px var(--glow);
-  transition: width 0.35s var(--ease);
 }
 
 /* ---------- 装完那一屏 ---------- */
@@ -434,21 +402,135 @@ svg {
 /* 标题条以下、按钮以上的整块内容 */
 .page {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  gap: 16px;
   flex: 1;
   min-height: 0;
 }
 
-/* ---------- 唯一那个按钮 ---------- */
-/* 屏幕与按键之间的印刷带：字要压得很低，是"印在壳上"的，不是界面元素 */
-.print {
-  flex: 0 0 auto;
+/* 右半边：操作区。左边整块留给屏幕，报告才有地方摊开 */
+.deck {
+  flex: 0 0 246px;
   display: flex;
-  align-items: baseline;
-  padding: 0 3px;
-  margin-top: 13px;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
 }
 
+/* 面板上的两张卡片：作者、跳转 */
+.card {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--char-1);
+  box-shadow: inset 0 0 0 1px var(--hairline), inset 0 1px 0 var(--unit-top);
+}
+
+.card .line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.card .line .k {
+  font-size: 11px;
+  color: var(--beige-faint);
+}
+
+.card .line b {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--beige-dim);
+}
+
+.card .links {
+  display: flex;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+/* 数据贴在铭牌下面；作者卡片和大键压到底部 */
+.deck .mid {
+  flex: 0 0 auto;
+}
+
+.deck .card {
+  margin-top: auto;
+}
+
+/* ---------- 屏幕底部状态行：灯 + 状态词 + 进度条 + 百分比 ---------- */
+.screen-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 40px;
+  padding: 0 16px;
+  box-shadow: inset 0 1px 0 var(--hairline);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--beige-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.screen-status .led {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--idle);
+  transition: background 0.25s var(--ease), box-shadow 0.25s var(--ease);
+}
+
+.screen-status.run .led {
+  background: var(--run);
+  box-shadow: 0 0 9px var(--glow);
+}
+
+.screen-status.good .led {
+  background: var(--ok);
+}
+
+.screen-status .word {
+  flex: 0 0 auto;
+}
+
+.screen-status .bar {
+  flex: 1;
+  min-width: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--hairline);
+  overflow: hidden;
+}
+
+.screen-status .bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: var(--orange);
+  box-shadow: 0 0 8px var(--glow);
+  transition: width 0.35s var(--ease);
+}
+
+.screen-status .pct {
+  flex: 0 0 auto;
+  color: var(--beige);
+}
+
+
+.deck .install {
+  height: 76px;
+  border-radius: 13px;
+  font-size: 18px;
+  /* 这颗键带 4px 的"键帽"投影。让它连投影的下沿和屏幕下沿齐平，
+     否则看着像按钮比屏幕矮下去一截 */
+  margin-bottom: 6px;
+}
+
+/* ---------- 唯一那个按钮 ---------- */
+/* 操作区里那几行字：字压得很低，是"印在壳上"的，不是界面元素 */
 .print .by {
   font-size: 11px;
   color: var(--beige-faint);
@@ -459,18 +541,10 @@ svg {
   color: var(--beige-dim);
 }
 
-/* 印刷带右侧的两个跳转键靠右收成一排 */
-.print .links {
-  margin-left: auto;
-  margin-right: -6px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 /* 印刷带右侧的跳转键。做成实底小胶囊：印刷带上的字都是压低的灰，
    这里必须靠"有底色 + 有描边 + 有文字"三个信号才能一眼看出是能点的东西。 */
-.print .jump {
+.jump {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -490,29 +564,22 @@ svg {
 }
 
 /* 图标点一个强调色：这一条带子上其它字都是印刷灰，只有它是"能点的" */
-.print .jump svg {
+.jump svg {
   color: var(--orange);
 }
 
-.print .jump:hover {
+.jump:hover {
   color: var(--beige);
   filter: brightness(1.22);
 }
 
-.print .jump:active {
+.jump:active {
   transform: translateY(1px);
 }
 
-.print .jump:focus-visible {
+.jump:focus-visible {
   outline: 2px solid var(--beige);
   outline-offset: 2px;
-}
-
-.deck {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  margin-top: 12px;
 }
 
 .install {
@@ -555,3 +622,283 @@ svg {
   outline-offset: 3px;
 }
 
+/* ---------- 检测报告：顶部小标题 + 结论大字 ---------- */
+.head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 13px 16px 0;
+}
+
+.head .cap {
+  font-size: 10.5px;
+  color: var(--beige-faint);
+}
+
+.head .cap-en {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--beige-faint);
+  opacity: 0.6;
+}
+
+.verdict {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 16px 12px;
+}
+
+.verdict .big {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--orange);
+  font-variant-numeric: tabular-nums;
+  transition: color 0.25s var(--ease);
+}
+
+/* 一个都不缺时橙色退掉，别让"没事"也看着像警报 */
+.verdict.good .big {
+  color: var(--beige);
+}
+
+.verdict .sub {
+  font-size: 10.5px;
+  color: var(--beige-faint);
+}
+
+/* 行本身是个按钮：整行可点，点开看这一组缺哪些文件 */
+.row {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  height: 30px;
+  border-radius: 5px;
+  transition: background 0.15s var(--ease);
+}
+
+.row:hover,
+.row.open {
+  background: var(--hover);
+}
+
+.row.done {
+  cursor: default;
+}
+
+.row.done:hover {
+  background: none;
+}
+
+.row .cnt {
+  flex: 0 0 auto;
+  color: var(--beige-faint);
+}
+
+.row.done .cnt {
+  color: var(--beige-faint);
+}
+
+.row .chev {
+  flex: 0 0 auto;
+  margin-left: 1px;
+  color: var(--beige-faint);
+  transition: transform 0.18s var(--ease), color 0.18s var(--ease);
+}
+
+.row:hover .chev {
+  color: var(--beige-dim);
+}
+
+.row.open .chev {
+  transform: rotate(90deg);
+}
+
+.row:focus-visible {
+  outline: 1px solid var(--beige-faint);
+  outline-offset: 1px;
+}
+
+/* 展开的明细：一排小胶囊，标了 32 / 64 / 32-64 */
+.detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 5px;
+  padding: 4px 0 8px 13px;
+}
+
+.detail .file {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--beige-dim);
+  background: var(--char-3);
+  border-radius: 5px;
+  padding: 2px 5px;
+  white-space: nowrap;
+}
+
+.detail .file i {
+  margin-left: 4px;
+  font-style: normal;
+  font-size: 8.5px;
+  color: var(--beige-faint);
+}
+
+.detail .file.wait {
+  background: none;
+  color: var(--beige-faint);
+}
+
+/* ---------- 右面板中间：分组 / 文件 / 待补，发丝线分隔 ---------- */
+.stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 9px 0;
+  box-shadow: inset 0 -1px 0 var(--hairline);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--beige-faint);
+}
+
+.stat:last-child {
+  box-shadow: none;
+}
+
+.stat b {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--beige-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat b.hot {
+  color: var(--orange);
+}
+
+/* ---------- 一、还没检测 ---------- */
+.idle {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 28px 16px 4px;
+}
+
+.idle .big {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--beige-dim);
+}
+
+.idle .hint {
+  font-size: 11.5px;
+  color: var(--beige-faint);
+}
+
+/* 分成六格的占位骨架：检测前后是同一套行，只是数字空着 */
+.skeleton {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 16px 16px;
+  overflow: hidden;
+}
+
+.skeleton .sk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--beige-faint);
+}
+
+.skeleton .sk i {
+  flex: 0 0 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--led-off);
+}
+
+.skeleton .sk span {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.7;
+}
+
+.skeleton .sk b {
+  font-weight: 500;
+  opacity: 0.5;
+}
+
+/* ---------- 二、正在检测：日志屏 ---------- */
+.log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  padding: 10px 16px 14px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.log::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.log .l {
+  display: flex;
+  gap: 8px;
+  color: var(--beige-faint);
+}
+
+.log .l .t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.log .l .f {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+/* 缺的那几行用橙色挑出来 */
+.log .l.bad .t,
+.log .l.bad .f {
+  color: var(--orange);
+}
+
+.log .l.head {
+  margin-top: 7px;
+  color: var(--beige-dim);
+}
+
+.log .l.head:first-child {
+  margin-top: 0;
+}
+
+/* 修完之后压在打勾下面的一句补充（比如"重启后替换"） */
+.screen > .after {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 16px 14px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--beige-faint);
+}

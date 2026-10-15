@@ -38,12 +38,36 @@ struct Group {
 }
 
 const GROUPS: &[Group] = &[
-    Group { id: "dx9",    name: "DirectX 9 运行库",        prefixes: &["d3dx9_"] },
-    Group { id: "dx10",   name: "DirectX 10 运行库",       prefixes: &["d3dx10"] },
-    Group { id: "dx11",   name: "DirectX 11 运行库",       prefixes: &["d3dx11"] },
-    Group { id: "shader", name: "着色器编译器 D3DCompiler", prefixes: &["d3dcompiler_", "d3dcsx_"] },
-    Group { id: "audio",  name: "XAudio / XACT 音频",       prefixes: &["xaudio2_", "xactengine", "xapofx", "x3daudio"] },
-    Group { id: "input",  name: "XInput 手柄支持",          prefixes: &["xinput"] },
+    Group {
+        id: "dx9",
+        name: "DirectX 9 运行库",
+        prefixes: &["d3dx9_"],
+    },
+    Group {
+        id: "dx10",
+        name: "DirectX 10 运行库",
+        prefixes: &["d3dx10"],
+    },
+    Group {
+        id: "dx11",
+        name: "DirectX 11 运行库",
+        prefixes: &["d3dx11"],
+    },
+    Group {
+        id: "shader",
+        name: "着色器编译器 D3DCompiler",
+        prefixes: &["d3dcompiler_", "d3dcsx_"],
+    },
+    Group {
+        id: "audio",
+        name: "XAudio / XACT 音频",
+        prefixes: &["xaudio2_", "xactengine", "xapofx", "x3daudio"],
+    },
+    Group {
+        id: "input",
+        name: "XInput 手柄支持",
+        prefixes: &["xinput"],
+    },
 ];
 
 fn group_of(file: &str) -> Option<&'static str> {
@@ -68,6 +92,14 @@ pub struct GroupInfo {
     missing: usize,
 }
 
+/// 明细面板用：一个文件在哪些架构下缺
+#[derive(Serialize)]
+pub struct FileInfo {
+    name: String,
+    x86: bool,
+    x64: bool,
+}
+
 #[derive(Clone, Serialize)]
 struct Progress {
     /// 界面上那一行的 id
@@ -84,6 +116,19 @@ struct Done {
     ok: bool,
     copied: usize,
     skipped: usize,
+    /// 这些文件当时被占用、杀不掉占用进程，已经安排"重启后替换"
+    pending_reboot: usize,
+}
+
+/// 检测时往界面推的一行：像在跑代码那样一行行往外吐
+#[derive(Clone, Serialize)]
+struct ScanLog {
+    /// 这一行属于哪一组（换组时界面会打一行组名）
+    group: String,
+    text: String,
+    missing: bool,
+    index: usize,
+    total: usize,
 }
 
 // ---------- 路径 ----------
@@ -181,7 +226,12 @@ fn payload_root(app: &AppHandle) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    for rel in ["../../_work/payload", "../../payload", "../payload", "payload"] {
+    for rel in [
+        "../../_work/payload",
+        "../../payload",
+        "../payload",
+        "payload",
+    ] {
         let p = PathBuf::from(rel);
         if p.is_dir() {
             return Some(p);
@@ -197,7 +247,9 @@ fn group_files(root: &Path, id: &str) -> Vec<(Arch, String)> {
     let mut out = Vec::new();
     for arch in [Arch::X86, Arch::X64] {
         let dir = root.join(arch.dir());
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
             if !name.to_ascii_lowercase().ends_with(".dll") {
@@ -222,13 +274,171 @@ fn missing_of(root: &Path, id: &str) -> (usize, usize, Vec<(Arch, String)>) {
     (files.len(), missing.len(), missing)
 }
 
+// ---------- 占用 ----------
+
+/// 谁占着这些文件？找到就把它们结束掉。
+/// 用的是 Windows 自己的重启管理器——安装程序"关掉正在使用本程序的应用"就是这套 API，
+/// 比自己枚举句柄稳。需要管理员权限（我们启动时就要了）。
+#[cfg(windows)]
+fn kill_lockers(paths: &[PathBuf]) -> Vec<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::RestartManager::{
+        RmEndSession, RmForceShutdown, RmGetList, RmRegisterResources, RmShutdown, RmStartSession,
+        RM_PROCESS_INFO,
+    };
+
+    let mut names: Vec<String> = Vec::new();
+    let wide: Vec<Vec<u16>> = paths
+        .iter()
+        .map(|p| {
+            p.as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+    let ptrs: Vec<*const u16> = wide.iter().map(|w| w.as_ptr()).collect();
+
+    unsafe {
+        let mut session: u32 = 0;
+        let mut key = [0u16; 33]; // CCH_RM_SESSION_KEY + 1
+        let rc_start = RmStartSession(&mut session, 0, key.as_mut_ptr());
+        if rc_start != 0 {
+            return names;
+        }
+
+        let registered = RmRegisterResources(
+            session,
+            ptrs.len() as u32,
+            ptrs.as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+        ) == 0;
+        if registered {
+            let mut need: u32 = 0;
+            let mut count: u32 = 0;
+            let mut reasons: u32 = 0;
+            // 第一遍只为问出"要几个 RM_PROCESS_INFO"（返回 ERROR_MORE_DATA）
+            RmGetList(
+                session,
+                &mut need,
+                &mut count,
+                std::ptr::null_mut(),
+                &mut reasons,
+            );
+
+            if need > 0 {
+                let mut infos: Vec<RM_PROCESS_INFO> = Vec::with_capacity(need as usize);
+                for _ in 0..need {
+                    infos.push(std::mem::zeroed());
+                }
+                count = need;
+                if RmGetList(
+                    session,
+                    &mut need,
+                    &mut count,
+                    infos.as_mut_ptr(),
+                    &mut reasons,
+                ) == 0
+                {
+                    for info in infos.iter().take(count as usize) {
+                        let name: String = info
+                            .strAppName
+                            .iter()
+                            .take_while(|c| **c != 0)
+                            .map(|c| char::from_u32(*c as u32).unwrap_or('?'))
+                            .collect();
+                        if !name.is_empty() {
+                            names.push(name);
+                        }
+                    }
+                    // 强关：这些进程正拿着我们要写的系统 dll，不结束没法替换
+                    RmShutdown(session, RmForceShutdown as u32, None);
+                }
+            }
+        }
+        RmEndSession(session);
+    }
+
+    names.sort();
+    names.dedup();
+    names
+}
+
+#[cfg(not(windows))]
+fn kill_lockers(_paths: &[PathBuf]) -> Vec<String> {
+    Vec::new()
+}
+
+/// 实在替换不了（占用它的进程杀不掉）时的最后一手：把新文件放旁边，
+/// 让 Windows 在下次重启时替换掉。安装程序那句"重启后生效"就是这么来的。
+#[cfg(windows)]
+fn schedule_replace_on_reboot(from: &Path, to: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_DELAY_UNTIL_REBOOT};
+
+    let staging = to.with_extension("dll.new");
+    if std::fs::copy(from, &staging).is_err() {
+        return false;
+    }
+    let wide = |p: &Path| -> Vec<u16> {
+        p.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    };
+    let (a, b) = (wide(&staging), wide(to));
+    unsafe { MoveFileExW(a.as_ptr(), b.as_ptr(), MOVEFILE_DELAY_UNTIL_REBOOT) != 0 }
+}
+
+#[cfg(not(windows))]
+fn schedule_replace_on_reboot(_from: &Path, _to: &Path) -> bool {
+    false
+}
+
 // ---------- 命令 ----------
 
+/// 检测：逐个文件看系统目录里有没有，边查边把结果推给前端。
+/// 返回的是汇总（界面报告用），中间那一行行的进度走 scan:log 事件。
 #[tauri::command]
-fn scan(app: AppHandle) -> Vec<GroupInfo> {
+fn detect(app: AppHandle) -> Vec<GroupInfo> {
     let Some(root) = payload_root(&app) else {
         return Vec::new();
     };
+
+    // 先把要查的排个队，好算总进度
+    let mut jobs: Vec<(&'static Group, Arch, String)> = Vec::new();
+    for g in GROUPS {
+        for (arch, name) in group_files(&root, g.id) {
+            jobs.push((g, arch, name));
+        }
+    }
+    let total = jobs.len();
+    let mut last_group = "";
+
+    for (index, (g, arch, name)) in jobs.iter().enumerate() {
+        let missing = !target_dir(*arch).join(name).is_file();
+        let _ = app.emit(
+            "scan:log",
+            ScanLog {
+                group: if g.id == last_group {
+                    String::new()
+                } else {
+                    g.name.to_string()
+                },
+                text: format!("{}\\{}", arch.dir(), name),
+                missing,
+                index,
+                total,
+            },
+        );
+        last_group = g.id;
+        // 一行一行地吐，太快了看不出在"跑"；368 个文件 × 2ms ≈ 0.7 秒
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+
     GROUPS
         .iter()
         .map(|g| {
@@ -251,6 +461,35 @@ fn scan(app: AppHandle) -> Vec<GroupInfo> {
 #[tauri::command]
 fn install(app: AppHandle, rows: Vec<String>) {
     std::thread::spawn(move || run_repair(app, rows));
+}
+
+/// 某个分组缺了哪些文件——界面点开那一行时用
+#[tauri::command]
+fn missing_files(app: AppHandle, id: String) -> Vec<FileInfo> {
+    let Some(root) = payload_root(&app) else {
+        return Vec::new();
+    };
+    let (_, _, missing) = missing_of(&root, &id);
+    let mut out: Vec<FileInfo> = Vec::new();
+    for (arch, name) in missing {
+        match out.iter_mut().find(|f| f.name == name) {
+            Some(f) => match arch {
+                Arch::X86 => f.x86 = true,
+                Arch::X64 => f.x64 = true,
+            },
+            None => out.push(FileInfo {
+                name,
+                x86: arch == Arch::X86,
+                x64: arch == Arch::X64,
+            }),
+        }
+    }
+    out.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+    });
+    out
 }
 
 #[tauri::command]
@@ -332,7 +571,12 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
     let Some(root) = payload_root(app) else {
         let _ = app.emit(
             "install:done",
-            Done { ok: false, copied: 0, skipped: 0 },
+            Done {
+                ok: false,
+                copied: 0,
+                skipped: 0,
+                pending_reboot: 0,
+            },
         );
         log("找不到 payload 目录");
         return;
@@ -349,7 +593,13 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
             // 一行都不缺也要推一条，界面才会把它标成完成
             let _ = app.emit(
                 "install:progress",
-                Progress { row: g.id.into(), state: "done", index: 0, total: 1, message: None },
+                Progress {
+                    row: g.id.into(),
+                    state: "done",
+                    index: 0,
+                    total: 1,
+                    message: None,
+                },
             );
         }
     }
@@ -358,10 +608,13 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
     let mut index = 0usize;
     let mut copied = 0usize;
     let mut failed = 0usize;
+    let mut pending_reboot = 0usize;
 
     for (g, files) in &plan {
         log(&format!("开始 {} ({})", g.id, g.name));
         let mut last_error: Option<String> = None;
+        let mut locked: Vec<(Arch, String)> = Vec::new();
+
         for (arch, name) in files {
             let from = root.join(arch.dir()).join(name);
             let to = target_dir(*arch).join(name);
@@ -371,12 +624,8 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
             match std::fs::copy(&from, &to) {
                 Ok(_) => copied += 1,
                 Err(e) => {
-                    failed += 1;
-                    let msg = format!("{} 复制失败：{e}", name);
-                    log(&msg);
-                    if last_error.is_none() {
-                        last_error = Some(msg);
-                    }
+                    log(&format!("{name} 被占用或写不进去：{e}"));
+                    locked.push((*arch, name.clone()));
                 }
             }
             index += 1;
@@ -391,6 +640,68 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
                 },
             );
         }
+
+        // 有被占用的：找出占着它的进程、结束掉、再补一遍
+        if !locked.is_empty() {
+            let paths: Vec<PathBuf> = locked
+                .iter()
+                .map(|(arch, name)| target_dir(*arch).join(name))
+                .collect();
+            let who = kill_lockers(&paths);
+            if !who.is_empty() {
+                let msg = format!("解除占用 {}", who.join("、"));
+                log(&msg);
+                let _ = app.emit(
+                    "install:progress",
+                    Progress {
+                        row: g.id.into(),
+                        state: "run",
+                        index,
+                        total,
+                        message: Some(msg),
+                    },
+                );
+                // 等那几个进程真的退掉、句柄放出来
+                std::thread::sleep(std::time::Duration::from_millis(900));
+            }
+
+            for (arch, name) in locked {
+                let from = root.join(arch.dir()).join(&name);
+                let to = target_dir(arch).join(&name);
+                match std::fs::copy(&from, &to) {
+                    Ok(_) => {
+                        copied += 1;
+                        log(&format!("{name} 重试成功"));
+                    }
+                    Err(e) => {
+                        // 最后一手：安排重启后替换
+                        if schedule_replace_on_reboot(&from, &to) {
+                            pending_reboot += 1;
+                            log(&format!("{name} 仍然被占用，已安排重启后替换"));
+                        } else {
+                            failed += 1;
+                            let msg = format!("{} 复制失败：{e}", name);
+                            log(&msg);
+                            if last_error.is_none() {
+                                last_error = Some(msg);
+                            }
+                        }
+                    }
+                }
+                index += 1;
+                let _ = app.emit(
+                    "install:progress",
+                    Progress {
+                        row: g.id.into(),
+                        state: "run",
+                        index,
+                        total,
+                        message: None,
+                    },
+                );
+            }
+        }
+
         let _ = app.emit(
             "install:progress",
             Progress {
@@ -403,10 +714,17 @@ fn run_repair_inner(app: &AppHandle, rows: Vec<String>) {
         );
     }
 
-    log(&format!("完成：复制 {copied} 个，失败 {failed} 个"));
+    log(&format!(
+        "完成：复制 {copied} 个，失败 {failed} 个，待重启 {pending_reboot} 个"
+    ));
     let _ = app.emit(
         "install:done",
-        Done { ok: failed == 0, copied, skipped: 0 },
+        Done {
+            ok: failed == 0,
+            copied,
+            skipped: 0,
+            pending_reboot,
+        },
     );
 }
 
@@ -478,8 +796,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            scan,
+            detect,
             install,
+            missing_files,
             is_elevated,
             request_elevation,
             open_url,
@@ -488,3 +807,7 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("启动失败");
 }
+
+// 解除占用那段的自测（cargo test）
+#[cfg(test)]
+mod lock_test;
