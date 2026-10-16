@@ -7,7 +7,9 @@ rem    clean_dx.cmd list   = list what would be touched (nothing changed)
 rem    clean_dx.cmd clean  = delete every DX dll Clack DX would install
 rem    clean_dx.cmd break  = damage a few of them, to test the
 rem                          "present but wrong" detection + repair
-rem    double-click        = clean (asks for admin)
+rem    clean_dx.cmd mix    = damage a few AND delete the rest, so one
+rem                          detect pass shows both missing and abnormal
+rem    double-click        = mix (asks for admin)
 rem
 rem  Covered: d3dx9_ d3dx10 d3dx11 d3dcompiler_ d3dcsx_ xaudio2_
 rem           xactengine xapofx x3daudio xinput*
@@ -21,9 +23,9 @@ rem ============================================================
 setlocal EnableExtensions EnableDelayedExpansion
 set "SELF=%~f0"
 set "MODE=%~1"
-if /i "%MODE%"=="" set "MODE=clean"
-if /i not "%MODE%"=="list" if /i not "%MODE%"=="clean" if /i not "%MODE%"=="break" (
-    echo Usage: clean_dx.cmd [list^|clean^|break]
+if /i "%MODE%"=="" set "MODE=mix"
+if /i not "%MODE%"=="list" if /i not "%MODE%"=="clean" if /i not "%MODE%"=="break" if /i not "%MODE%"=="mix" (
+    echo Usage: clean_dx.cmd [list^|clean^|break^|mix]
     exit /b 2
 )
 
@@ -56,6 +58,7 @@ echo ============================================================
 if /i "%MODE%"=="list"  echo   Clack DX - list mode (nothing is changed)
 if /i "%MODE%"=="clean" echo   Clack DX - deleting DirectX runtime dlls
 if /i "%MODE%"=="break" echo   Clack DX - damaging a few of them
+if /i "%MODE%"=="mix"   echo   Clack DX - damaging a few, deleting the rest
 echo ============================================================
 echo.
 
@@ -68,6 +71,13 @@ rem follows the OS), and 1_4 / Uap ship with Windows 8+ - they are not in the
 rem June 2010 redist, so Clack DX could not put them back either.
 set "KEEP= xinput9_1_0.dll xinput1_4.dll xinputuap.dll "
 
+rem 损坏模式：先弄坏这几个，再把其余的删掉。mix 模式要把被弄坏的名字也加进 KEEP，
+rem 否则刚弄坏就被删了（那就只剩"缺失"一种状态，测不到"异常"那条判定）。
+if /i "%MODE%"=="mix" (
+    call :DAMAGE
+    set "KEEP= xinput9_1_0.dll xinput1_4.dll xinputuap.dll d3dx9_42.dll xaudio2_7.dll d3dcompiler_47.dll d3dx9_43.dll "
+)
+
 for %%D in ("%SystemRoot%\System32" "%SystemRoot%\SysWOW64") do (
     if exist "%%~D" (
         for %%P in (%PREFIXES%) do (
@@ -78,7 +88,7 @@ for %%D in ("%SystemRoot%\System32" "%SystemRoot%\SysWOW64") do (
     )
 )
 
-if "%MODE%"=="break" call :DAMAGE
+if /i "%MODE%"=="break" call :DAMAGE
 
 echo.
 echo ============================================================
@@ -87,6 +97,7 @@ if /i not "%MODE%"=="list" echo   Log: %LOG%
 echo.
 if /i "%MODE%"=="clean" echo   Now run Clack DX: it should report them missing.
 if /i "%MODE%"=="break" echo   Now run Clack DX: it should report "present but wrong".
+if /i "%MODE%"=="mix"   echo   Now run Clack DX: one pass should show both missing and abnormal.
 echo.
 pause
 exit /b
