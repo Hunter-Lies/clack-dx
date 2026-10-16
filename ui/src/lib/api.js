@@ -58,6 +58,9 @@ export const DEMO_STATE = {
   input: { missing: 0, bad: 0 },
 };
 
+/// 预览用：每组的文件总数（和 payload 里真实的对上，一共 184）
+export const DEMO_TOTAL = { dx9: 40, dx10: 24, dx11: 4, shader: 26, audio: 82, input: 8 };
+
 /// 检测。onLog 每查到一行调一次——界面上那屏"跑代码"就是它喂的。
 export async function detect(onLog) {
   if (inTauri) return invoke("detect");
@@ -95,7 +98,7 @@ export async function detect(onLog) {
   }
 
   return GROUPS.map((g) => {
-    const total = (DEMO_FILES[g.id] ?? []).length * 2;
+    const total = DEMO_TOTAL[g.id] ?? (DEMO_FILES[g.id] ?? []).length * 2;
     const missing = DEMO_STATE[g.id]?.missing ?? 0;
     const abnormal = DEMO_STATE[g.id]?.bad ?? 0;
     return {

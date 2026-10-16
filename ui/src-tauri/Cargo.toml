@@ -1,6 +1,6 @@
 [package]
 name = "clackdx"
-version = "1.1.0"
+version = "1.1.1"
 description = "咔哒 DX · DirectX 运行库修复"
 authors = ["HunterLies"]
 edition = "2021"

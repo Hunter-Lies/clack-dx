@@ -6,6 +6,7 @@ import { closeWindow, inTauri, startDrag } from "./lib/window";
 import {
   GROUPS,
   DEMO_STATE,
+  DEMO_TOTAL,
   noteOf,
   detect,
   installComponents,
@@ -17,7 +18,7 @@ import {
   requestElevation,
 } from "./lib/api";
 
-const VERSION = "v1.1.0";
+const VERSION = "v1.1.1";
 
 // 界面一共六步：待检测 -> 检测中 -> 报告 -> 修复中 -> 完成（fail 是修复没干净）
 const phase = ref("idle"); // idle | scan | report | busy | done | fail
@@ -89,7 +90,7 @@ if (import.meta.env.DEV) {
         id: g.id,
         name: g.name,
         note: noteOf(missing, abnormal),
-        total: 40,
+        total: DEMO_TOTAL[g.id] ?? 40,
         missing,
         abnormal,
       };

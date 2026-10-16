@@ -8,6 +8,7 @@ use serde::Serialize;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Once;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// 复制进行中。这段时间不允许关窗口。
@@ -18,6 +19,9 @@ static RELAUNCHING: AtomicBool = AtomicBool::new(false);
 
 /// 开了 `--verify-hash` 时，除了版本还会逐字节比对（慢，抓静默损坏）
 static VERIFY_HASH: AtomicBool = AtomicBool::new(false);
+
+/// 日志文件第一次写入前做一次准备（清空上一次运行留下的内容）
+static LOG_READY: Once = Once::new();
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -178,11 +182,16 @@ fn log(line: &str) {
     // 别用 println!：正式版没有控制台，stdout 是空句柄，写失败会 panic，
     // 而 release 配了 panic = "abort"，一个日志就能把整个程序带走。
     let _ = writeln!(std::io::stdout(), "[clackdx] {line}");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(std::env::temp_dir().join("ClackDX.log"))
-    {
+    let path = std::env::temp_dir().join("ClackDX.log");
+    LOG_READY.call_once(|| {
+        // 一次运行只留一份日志：没管理员权限时启动的那个进程先把它清空，
+        // 提权起来的那个（带 --elevated）接着往后写。
+        // 一直追加的话文件会越滚越大，用户真出事发过来的那份还得自己找最后一段。
+        if !std::env::args().any(|a| a == "--elevated") {
+            let _ = std::fs::write(&path, b"");
+        }
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "[clackdx] {line}");
     }
 }
