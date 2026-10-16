@@ -582,6 +582,21 @@ svg {
   outline-offset: 2px;
 }
 
+/* 需要重启那种情况：一个键变两个。左边立刻重启（主色），右边稍后重启（机身色），
+   等宽、间距 16px，高度跟单键一样，切换时底盘不跳。 */
+.reboot-keys {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.install.ghost {
+  background: var(--char-3);
+  color: var(--beige);
+  box-shadow: 0 5px 0 var(--char-0), 0 11px 20px var(--raised-sm),
+    inset 0 1px 0 var(--unit-top);
+}
+
 .install {
   position: relative;
   width: 100%;

@@ -16,9 +16,10 @@ import {
   onScanLog,
   quitApp,
   requestElevation,
+  restartNow,
 } from "./lib/api";
 
-const VERSION = "v1.1.1";
+const VERSION = "v1.1.2";
 
 // 界面一共六步：待检测 -> 检测中 -> 报告 -> 修复中 -> 完成（fail 是修复没干净）
 const phase = ref("idle"); // idle | scan | report | busy | done | fail
@@ -189,6 +190,19 @@ async function start() {
   return runRepair();
 }
 
+/// 完成屏上的「立刻重启」：把那几个"重启后才替换"的文件落实下去。
+/// 解包出来的东西由后端在重启前自己收走。浏览器预览里没系统可重启，退回待检测。
+async function restart() {
+  if (!inTauri) {
+    phase.value = "idle";
+    items.value = [];
+    percent.value = 0;
+    pendingReboot.value = 0;
+    return;
+  }
+  await restartNow();
+}
+
 // ---------- 后端事件 ----------
 
 function handleProgress(p) {
@@ -273,6 +287,7 @@ onBeforeUnmount(() => {
         :log-lines="logLines"
         :version="VERSION"
         @press="start"
+        @restart="restart"
         @quit="quit"
       />
     </div>

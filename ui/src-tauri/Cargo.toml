@@ -1,6 +1,6 @@
 [package]
 name = "clackdx"
-version = "1.1.1"
+version = "1.1.2"
 description = "咔哒 DX · DirectX 运行库修复"
 authors = ["HunterLies"]
 edition = "2021"
@@ -25,6 +25,7 @@ windows-sys = { version = "0.59", features = [
   "Win32_Security",
   "Win32_Storage_FileSystem",
   "Win32_System_RestartManager",
+  "Win32_System_Shutdown",
   "Win32_System_Threading",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",

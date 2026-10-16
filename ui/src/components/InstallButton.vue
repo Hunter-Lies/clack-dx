@@ -6,9 +6,11 @@ const props = defineProps({
   /// idle | scan | report | busy | done | fail
   phase: { type: String, default: "idle" },
   count: { type: Number, default: 0 },
+  /// 有文件只能等重启才替换：完成之后这一个键变成两个（立刻重启 / 稍后重启）
+  reboot: { type: Boolean, default: false },
 });
 
-defineEmits(["press"]);
+defineEmits(["press", "restart"]);
 
 const text = computed(() => {
   switch (props.phase) {
@@ -33,7 +35,11 @@ const locked = computed(
 </script>
 
 <template>
-  <button class="install" :disabled="locked" @click="$emit('press')">
+  <div v-if="phase === 'done' && reboot" class="reboot-keys">
+    <button class="install" @click="$emit('restart')">立刻重启</button>
+    <button class="install ghost" @click="$emit('press')">稍后重启</button>
+  </div>
+  <button v-else class="install" :disabled="locked" @click="$emit('press')">
     {{ text }}
   </button>
 </template>

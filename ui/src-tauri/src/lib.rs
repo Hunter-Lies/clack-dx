@@ -8,7 +8,6 @@ use serde::Serialize;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Once;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// 复制进行中。这段时间不允许关窗口。
@@ -19,9 +18,6 @@ static RELAUNCHING: AtomicBool = AtomicBool::new(false);
 
 /// 开了 `--verify-hash` 时，除了版本还会逐字节比对（慢，抓静默损坏）
 static VERIFY_HASH: AtomicBool = AtomicBool::new(false);
-
-/// 日志文件第一次写入前做一次准备（清空上一次运行留下的内容）
-static LOG_READY: Once = Once::new();
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -177,21 +173,39 @@ struct ScanLog {
 #[cfg(not(debug_assertions))]
 const PAYLOAD_ZIP: &[u8] = include_bytes!("../payload.zip");
 
-/// 同时打到控制台（开发时看）和 %TEMP%\ClackDX.log（用户出问题直接把文件发过来）
+/// 程序自己的工作目录。
+/// 日志放这儿而不是 `%TEMP%`：标准账户 + UAC 里输管理员密码时，提权进程的 `%TEMP%`
+/// 属于那个管理员账户，日志会溜到别的用户目录去，用户"把日志发过来"发来的就不是这份。
+fn clack_dir() -> PathBuf {
+    std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:\\ProgramData"))
+        .join("ClackDX")
+}
+
+fn log_path() -> PathBuf {
+    clack_dir().join("ClackDX.log")
+}
+
+/// 每次启动清空日志：一次运行只留一份，用户发过来的就是这一次的完整记录。
+fn reset_log() {
+    let _ = std::fs::create_dir_all(clack_dir());
+    // 提权起来的那个进程（带 --elevated）是接着同一个进程的活干的，别抹掉它前面写的
+    if !std::env::args().any(|a| a == "--elevated") {
+        let _ = std::fs::write(log_path(), b"");
+    }
+}
+
+/// 同时打到控制台（开发时看）和 ClickDX.log（用户出问题直接把文件发过来）
 fn log(line: &str) {
     // 别用 println!：正式版没有控制台，stdout 是空句柄，写失败会 panic，
     // 而 release 配了 panic = "abort"，一个日志就能把整个程序带走。
     let _ = writeln!(std::io::stdout(), "[clackdx] {line}");
-    let path = std::env::temp_dir().join("ClackDX.log");
-    LOG_READY.call_once(|| {
-        // 一次运行只留一份日志：没管理员权限时启动的那个进程先把它清空，
-        // 提权起来的那个（带 --elevated）接着往后写。
-        // 一直追加的话文件会越滚越大，用户真出事发过来的那份还得自己找最后一段。
-        if !std::env::args().any(|a| a == "--elevated") {
-            let _ = std::fs::write(&path, b"");
-        }
-    });
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path())
+    {
         let _ = writeln!(f, "[clackdx] {line}");
     }
 }
@@ -524,8 +538,11 @@ fn same_bytes(a: &Path, b: &Path) -> bool {
 
 // ---------- 占用 ----------
 
-/// 谁占着这些文件？找到就把它们结束掉。
-/// 用的是 Windows 自己的重启管理器——安装程序"关掉正在使用本程序的应用"就是这套 API，
+/// 谁占着这些文件？找到就请它们退出，并且**等它们真的退出**。
+///
+/// 之前只调 `RmShutdown` 就往下走，而它只是"发出关闭请求"、不等进程结束——于是复制照样
+/// 失败，白白掉进"安排重启后替换"。所以现在是：请求 → 等最多 8 秒 → 还赖着的直接结束它 → 再等 3 秒。
+/// 用 Windows 自己的重启管理器拿名单（安装程序那句"关掉正在使用本程序的应用"就是这套 API），
 /// 比自己枚举句柄稳。需要管理员权限（我们启动时就要了）。
 #[cfg(windows)]
 fn kill_lockers(paths: &[PathBuf]) -> Vec<String> {
@@ -536,6 +553,7 @@ fn kill_lockers(paths: &[PathBuf]) -> Vec<String> {
     };
 
     let mut names: Vec<String> = Vec::new();
+    let mut pids: Vec<u32> = Vec::new();
     let wide: Vec<Vec<u16>> = paths
         .iter()
         .map(|p| {
@@ -601,6 +619,7 @@ fn kill_lockers(paths: &[PathBuf]) -> Vec<String> {
                         if !name.is_empty() {
                             names.push(name);
                         }
+                        pids.push(info.Process.dwProcessId);
                     }
                     // 强关：这些进程正拿着我们要写的系统 dll，不结束没法替换
                     RmShutdown(session, RmForceShutdown as u32, None);
@@ -612,12 +631,91 @@ fn kill_lockers(paths: &[PathBuf]) -> Vec<String> {
 
     names.sort();
     names.dedup();
+    if pids.is_empty() {
+        return names;
+    }
+
+    // 等它们真的走掉再返回——不然上面那声请求等于白发
+    let waited = wait_gone(&pids, 8_000);
+    if waited > 0 {
+        log(&format!("等了 {waited} 毫秒，{} 个进程还没退出，直接结束它们", pids.len()));
+        hard_kill(&pids);
+    }
     names
 }
 
 #[cfg(not(windows))]
 fn kill_lockers(_paths: &[PathBuf]) -> Vec<String> {
     Vec::new()
+}
+
+/// 等这些进程退出，返回实际等待的毫秒数（0 = 等之前就都没了）。
+#[cfg(windows)]
+fn wait_gone(pids: &[u32], max_ms: u64) -> u64 {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcessId, OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SYNCHRONIZE,
+    };
+
+    let me = unsafe { GetCurrentProcessId() };
+    let step = 200u64;
+    let mut waited = 0u64;
+    while waited < max_ms {
+        let mut alive = 0;
+        for pid in pids {
+            // pid 0/4 是空闲和 System，自己也不能等自己
+            if *pid == 0 || *pid == 4 || *pid == me {
+                continue;
+            }
+            unsafe {
+                let h = OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, *pid);
+                if h.is_null() {
+                    continue; // 打不开：多半已经没了
+                }
+                let exited = WaitForSingleObject(h, 0) == 0;
+                CloseHandle(h);
+                if !exited {
+                    alive += 1;
+                }
+            }
+        }
+        if alive == 0 {
+            return waited;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(step));
+        waited += step;
+    }
+    waited
+}
+
+/// 宽限期过了还活着的那几个，直接结束。
+#[cfg(windows)]
+fn hard_kill(pids: &[u32]) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcessId, OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        PROCESS_TERMINATE,
+    };
+
+    let me = unsafe { GetCurrentProcessId() };
+    for pid in pids {
+        if *pid == 0 || *pid == 4 || *pid == me {
+            continue;
+        }
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, *pid);
+            if h.is_null() {
+                continue;
+            }
+            if WaitForSingleObject(h, 0) != 0 {
+                log(&format!("{pid} 没自己退，直接结束"));
+                TerminateProcess(h, 1);
+                WaitForSingleObject(h, 3_000);
+            }
+            CloseHandle(h);
+        }
+    }
 }
 
 /// 实在替换不了（占用它的进程杀不掉）时的最后一手：把新文件放旁边，
@@ -740,6 +838,12 @@ fn note_of(missing: usize, abnormal: usize) -> String {
 
 #[tauri::command]
 fn install(app: AppHandle, rows: Vec<String>) {
+    // 连点两下的守卫：第二次点击直接丢掉。两个线程一起补的话进度事件会互相覆盖，
+    // 先结束的那个还会把 BUSY 归零，让用户在另一个线程还在跑的时候关窗。
+    if BUSY.swap(true, Ordering::SeqCst) {
+        log("修复已经在跑了，忽略这次重复的请求");
+        return;
+    }
     std::thread::spawn(move || run_repair(app, rows));
 }
 
@@ -786,6 +890,109 @@ fn is_elevated() -> bool {
 fn quit() {
     cleanup_payload();
     std::process::exit(0);
+}
+
+/// 完成屏上的「立刻重启」：把安排好"重启后替换"的那几个文件落实下去。
+///
+/// 走 API 而不是 `shutdown.exe`：从这种带界面、已提权的进程里拉控制台程序，
+/// 实机上撞到过它加载阶段就挂（`0xc0000142`）。调 `ExitWindowsEx` 没有这一层。
+#[tauri::command]
+fn restart_now() -> bool {
+    log("用户选了立刻重启");
+    cleanup_payload();
+    if reboot_now() {
+        return true;
+    }
+    log("ExitWindowsEx 没成，退回 shutdown.exe 再试一次");
+    let ok = std::process::Command::new("shutdown.exe")
+        .args(["/r", "/t", "0"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        log("重启没能自动完成，让用户自己重启");
+    }
+    ok
+}
+
+/// 打开当前进程令牌里的 SeShutdownPrivilege（管理员令牌默认带着它，但是禁用状态，
+/// `ExitWindowsEx` 要求它是打开状态）。
+#[cfg(windows)]
+fn enable_shutdown_privilege() -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError};
+    use windows_sys::Win32::Security::{
+        AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED,
+        SE_SHUTDOWN_NAME, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    unsafe {
+        let mut token = std::ptr::null_mut();
+        if OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut token,
+        ) == 0
+        {
+            log("拿不到自己的令牌，重启这步跳过");
+            return false;
+        }
+        let mut luid = std::mem::zeroed();
+        if LookupPrivilegeValueW(std::ptr::null(), SE_SHUTDOWN_NAME, &mut luid) == 0 {
+            CloseHandle(token);
+            log("查不到 SeShutdownPrivilege");
+            return false;
+        }
+        let mut tp = TOKEN_PRIVILEGES {
+            PrivilegeCount: 1,
+            Privileges: [LUID_AND_ATTRIBUTES {
+                Luid: luid,
+                Attributes: SE_PRIVILEGE_ENABLED,
+            }],
+        };
+        // 这个 API 就算没成也可能返回 TRUE，所以要再看一次 GetLastError
+        let ok = AdjustTokenPrivileges(
+            token,
+            0,
+            &mut tp,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ) != 0
+            && GetLastError() == 0;
+        CloseHandle(token);
+        ok
+    }
+}
+
+#[cfg(not(windows))]
+fn enable_shutdown_privilege() -> bool {
+    false
+}
+
+/// 立刻重启。EWX_FORCEIFHUNG：只在有程序卡住时才强关，正常情况下走正常关机流程。
+#[cfg(windows)]
+fn reboot_now() -> bool {
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::System::Shutdown::{
+        ExitWindowsEx, EWX_FORCEIFHUNG, EWX_REBOOT, SHTDN_REASON_MAJOR_APPLICATION,
+    };
+
+    unsafe {
+        let _ = enable_shutdown_privilege();
+        if ExitWindowsEx(EWX_REBOOT | EWX_FORCEIFHUNG, SHTDN_REASON_MAJOR_APPLICATION) != 0 {
+            log("已请求系统重启");
+            true
+        } else {
+            log(&format!("ExitWindowsEx 失败：{}", GetLastError()));
+            false
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn reboot_now() -> bool {
+    false
 }
 
 /// 用系统默认程序打开链接。界面上的两个跳转键走这里。
@@ -846,7 +1053,6 @@ fn request_elevation(interactive: bool) -> bool {
 // ---------- 修复 ----------
 
 fn run_repair(app: AppHandle, rows: Vec<String>) {
-    BUSY.store(true, Ordering::SeqCst);
     run_repair_inner(&app, rows);
     BUSY.store(false, Ordering::SeqCst);
 }
@@ -1092,6 +1298,9 @@ fn relaunch_elevated() -> bool {
 }
 
 pub fn run() {
+    // 日志每次启动重写一份，从空白开始
+    reset_log();
+
     // 暗门：--verify-hash 时额外逐字节比对（抓版本对、大小也对、内容坏了的）
     if std::env::args().any(|a| a == "--verify-hash" || a == "--verify") {
         VERIFY_HASH.store(true, Ordering::SeqCst);
@@ -1114,6 +1323,7 @@ pub fn run() {
             missing_files,
             is_elevated,
             request_elevation,
+            restart_now,
             open_url,
             quit
         ])

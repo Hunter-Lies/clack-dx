@@ -32,7 +32,7 @@ const props = defineProps({
   version: { type: String, default: "" },
 });
 
-defineEmits(["press", "quit"]);
+defineEmits(["press", "quit", "restart"]);
 
 const allGood = computed(() => props.missingTotal === 0);
 const seen = computed(() => props.phase === "report" || props.phase === "busy" || props.phase === "fail");
@@ -160,7 +160,7 @@ if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("debu
             {{ fileTotal }} 个文件 · {{ items.length }} 组<template v-if="elapsed > 0"> · 用时 {{ elapsed }} 秒</template>
           </p>
           <p v-if="pendingReboot > 0" class="after warn">
-            {{ pendingReboot }} 个文件正被占用，已安排重启后替换
+            {{ pendingReboot }} 个文件正被占用，重启电脑后修复才生效
           </p>
         </div>
       </template>
@@ -338,7 +338,13 @@ if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("debu
         </div>
       </div>
 
-      <InstallButton :phase="phase" :count="missingTotal" @press="$emit('press')" />
+      <InstallButton
+        :phase="phase"
+        :count="missingTotal"
+        :reboot="pendingReboot > 0"
+        @press="$emit('press')"
+        @restart="$emit('restart')"
+      />
     </div>
   </div>
 </template>

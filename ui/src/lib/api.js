@@ -162,6 +162,11 @@ export function quitApp() {
   return inTauri ? invoke("quit") : Promise.resolve();
 }
 
+/// 完成屏上的「立刻重启」：把那几个"重启后才替换"的文件落实下去
+export function restartNow() {
+  return inTauri ? invoke("restart_now") : Promise.resolve(false);
+}
+
 export function onProgress(cb) {
   return inTauri
     ? listen("install:progress", (e) => cb(e.payload))
